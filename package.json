@@ -13,7 +13,8 @@
     "typecheck": "tsc --noEmit -p tsconfig.web.json --composite false && tsc --noEmit -p tsconfig.node.json --composite false",
     "package": "electron-vite build && electron-builder --dir",
     "package:linux": "electron-vite build && electron-builder --linux",
-    "postinstall": "electron-builder install-app-deps"
+    "postinstall": "electron-builder install-app-deps",
+    "package:win": "electron-vite build && electron-builder --win nsis dir --publish never"
   },
   "dependencies": {
     "@electron-toolkit/preload": "^3.0.1",
@@ -65,13 +66,20 @@
     },
     "win": {
       "target": [
-        "nsis"
+        "nsis",
+        "dir"
       ]
     },
     "mac": {
       "target": [
         "dmg"
       ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
     }
   }
 }
