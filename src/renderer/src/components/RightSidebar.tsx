@@ -119,7 +119,10 @@ export default function RightSidebar({
           if (cancelled || gen !== renderGen.current) return
           const pageIndex = i - 1
           const page = await pdf.getPage(i)
-          const viewport = page.getViewport({ scale: 0.25 })
+          // Sharper thumbs: CSS display ~0.28×, canvas at display × devicePixelRatio (retina)
+          const cssScale = 0.28
+          const dpr = Math.min(3, window.devicePixelRatio || 1)
+          const viewport = page.getViewport({ scale: cssScale * dpr })
           const item = document.createElement('div')
           item.className = 'thumb-item'
           item.dataset.index = String(pageIndex)
@@ -129,6 +132,8 @@ export default function RightSidebar({
           const canvas = document.createElement('canvas')
           canvas.width = Math.max(1, Math.floor(viewport.width))
           canvas.height = Math.max(1, Math.floor(viewport.height))
+          canvas.style.width = `${Math.max(1, Math.floor(viewport.width / dpr))}px`
+          canvas.style.height = `${Math.max(1, Math.floor(viewport.height / dpr))}px`
           item.appendChild(canvas)
 
           const label = document.createElement('div')

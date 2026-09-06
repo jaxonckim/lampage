@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>pdf.js selection copy</title>
+  <link rel="stylesheet" href="/pdfjs/web/pdf_viewer.css" />
+  <style>
+    body { margin: 16px; font-family: sans-serif; }
+    .pdf-viewer { position: relative; }
+    .pdf-page-wrap { position: relative; margin-bottom: 16px; box-shadow: 0 0 4px #ccc; }
+    .pdf-page-wrap canvas { display: block; }
+    .textLayer, .pdf-text-layer {
+      position: absolute; inset: 0; overflow: clip; line-height: 1;
+      opacity: 1; transform-origin: 0 0; z-index: 2;
+      pointer-events: auto; user-select: text; -webkit-user-select: text;
+    }
+    .textLayer span, .pdf-text-layer span,
+    .textLayer br, .pdf-text-layer br {
+      position: absolute; white-space: pre; transform-origin: 0% 0%;
+      color: transparent; cursor: text;
+      user-select: text; -webkit-user-select: text;
+    }
+    .textLayer ::selection, .pdf-text-layer ::selection {
+      background: rgba(20, 61, 46, 0.30);
+    }
+    .endOfContent, span[role="img"] {
+      user-select: none; -webkit-user-select: none;
+    }
+    .preview-scale { transform-origin: 0 0; }
+  </style>
+</head>
+<body>
+  <div id="mount"></div>
+  <pre id="log"></pre>
+  <script type="module">
+    import * as pdfjs from '/pdfjs/build/pdf.mjs'
+    import { getSelectionPlainText, cleanCopiedText } from './selectionText.bundle.js'
+
+    pdfjs.GlobalWorkerOptions.workerSrc = '/pdfjs/build/pdf.worker.min.mjs'
+
+    const results = []
+    function assertEq(name, actual, expected, native) {
+      const ok = actual === expected
+      results.push({ name, ok, actual, expected, native: native ?? null })
+      console.log(ok ? 'PASS' : 'FAIL', name, JSON.stringify({ actual, expected, native }))
+    }
+    function assertIncludes(name, actual, needle, native) {
+      const ok = typeof actual === 'string' && actual.includes(needle)
+      results.push({ name, ok, actual, expected: `includes ${JSON.stringify(needle)}`, native: native ?? null })
+      console.log(ok ? 'PASS' : 'FAIL', name, JSON.stringify({ actual, needle, native }))
+    }
+    function assertNoGlue(name, actual, bad, native) {
+      const ok = typeof actual === 'string' && !actual.includes(bad)
+      results.push({ name, ok, actual, expected: `not includes ${JSON.stringify(bad)}`, native: native ?? null })
+      console.log(ok ? 'PASS' : 'FAIL', name, JSON.stringify({ actual, bad, native }))
+    }
+    function assertMatchNative(name, helper, native) {
+      const n = cleanCopiedText(native)
+      const ok = helper === n
+      results.push({ name, ok, actual: helper, expected: n, native })
+      console.log(ok ? 'PASS' : 'FAIL', name, JSON.stringify({ helper, native: n }))
+    }
+
+    async function renderDoc(url, pageIndices, scale, { previewScale = scale, disableFontFace = false } = {}) {
+      const mount = document.createElement('div')
+      mount.className = 'pdf-viewer'
+      document.getElementById('mount').appendChild(mount)
+      const pdf = await pdfjs.getDocument({ url, disableFontFace }).promise
+      const layers = []
+      for (const pageIndex of pageIndices) {
+        const page = await pdf.getPage(pageIndex + 1)
+        const viewport = page.getViewport({ scale })
+        const preview = document.createElement('div')
+        preview.className = 'preview-scale'
+        if (previewScale !== scale) {
+          preview.style.transform = `scale(${previewScale / scale})`
+        }
+        const wrap = document.createElement('div')
+        wrap.className = 'pdf-page-wrap'
+        wrap.dataset.pageIndex = String(pageIndex)
+        wrap.style.width = `${viewport.width}px`
+        wrap.style.height = `${viewport.height}px`
+        // Skip canvas for speed on large docs when disableFontFace
+        if (!disableFontFace) {
+          const canvas = document.createElement('canvas')
+          canvas.width = viewport.width
+          canvas.height = viewport.height
+          wrap.appendChild(canvas)
+          await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise
+        }
+        const textLayerDiv = document.createElement('div')
+        textLayerDiv.className = 'pdf-text-layer textLayer'
+        textLayerDiv.style.setProperty('--scale-factor', String(viewport.scale))
+        wrap.appendChild(textLayerDiv)
+        const textContent = await page.getTextContent()
+        const textLayer = new pdfjs.TextLayer({
+          textContentSource: textContent,
+          container: textLayerDiv,
+          viewport
+        })
+        await textLayer.render()
+        const endOfContent = document.createElement('div')
+        endOfContent.className = 'endOfContent'
+        textLayerDiv.appendChild(endOfContent)
+        preview.appendChild(wrap)
+        mount.appendChild(preview)
+        layers.push(textLayerDiv)
+      }
+      return { mount, layers, pdf }
+    }
+
+    function allGlyphSpans(root) {
+      return [...root.querySelectorAll('.textLayer > span')].filter(
+        (s) => !s.classList.contains('endOfContent') && s.getAttribute('role') !== 'img' && (s.textContent || '').length
+      )
+    }
+
+    function findSpan(root, substr) {
+      const spans = allGlyphSpans(root)
+      const exact = spans.find((s) => (s.textContent || '') === substr)
+      if (exact) return exact
+      return spans.find((s) => (s.textContent || '').includes(substr))
+    }
+
+    function selectSpanRange(startSpan, startOffset, endSpan, endOffset) {
+      const sel = window.getSelection()
+      sel.removeAllRanges()
+      const r = document.createRange()
+      const a = startSpan.firstChild
+      const b = endSpan.firstChild
+      r.setStart(a, startOffset)
+      r.setEnd(b, endOffset)
+      sel.addRange(r)
+      return sel
+    }
+
+    function selectWholeSpans(fromSpan, toSpan) {
+      return selectSpanRange(fromSpan, 0, toSpan, (toSpan.firstChild?.textContent || '').length)
+    }
+
+    // ========== 1) find-copy-sample.pdf ==========
+    {
+      const { mount } = await renderDoc('/samples/find-copy-sample.pdf', [0, 1], 1.25)
+      const spanDump = allGlyphSpans(mount).map((s) => s.textContent)
+      console.log('span texts sample:', JSON.stringify(spanDump))
+
+      const sentenceStart = findSpan(mount, 'Select this sentence')
+      const sentenceEnd = findSpan(mount, 'floating button') || findSpan(mount, 'Ctrl/Cmd+C')
+      if (sentenceStart && sentenceEnd) {
+        const sel = selectWholeSpans(sentenceStart, sentenceEnd)
+        const text = getSelectionPlainText(sel)
+        assertIncludes('pdf-sentence-has-select', text, 'Select this sentence', sel.toString())
+        assertIncludes('pdf-sentence-has-copy', text, 'copy', sel.toString())
+        assertNoGlue('pdf-sentence-not-glued', text, 'Selectthissentence', sel.toString())
+      } else {
+        results.push({ name: 'pdf-sentence-spans', ok: false, actual: 'missing spans', expected: 'found' })
+      }
+
+      const findMe = findSpan(mount, 'find-me find-me find-me')
+      if (findMe) {
+        const sel = selectWholeSpans(findMe, findMe)
+        assertEq('pdf-find-me', getSelectionPlainText(sel), 'find-me find-me find-me', sel.toString())
+        const sel2 = selectSpanRange(findMe, 0, findMe, 7)
+        assertEq('pdf-find-me-partial', getSelectionPlainText(sel2), 'find-me', sel2.toString())
+      } else {
+        results.push({ name: 'pdf-find-me', ok: false, actual: 'missing', expected: 'find-me find-me find-me' })
+      }
+
+      const alpha = findSpan(mount, 'unique-token-alpha')
+      if (alpha) {
+        const sel = selectWholeSpans(alpha, alpha)
+        assertEq('pdf-unique-alpha', getSelectionPlainText(sel), 'unique-token-alpha', sel.toString())
+        const content = alpha.firstChild
+        const idx = content.textContent.indexOf('token')
+        const sel2 = selectSpanRange(alpha, idx, alpha, idx + 5)
+        assertEq('pdf-partial-token', getSelectionPlainText(sel2), 'token', sel2.toString())
+      }
+
+      const title = findSpan(mount, 'Lampage') || findSpan(mount, 'Lamp')
+      if (title) {
+        let end = title
+        if (title.textContent === 'Lamp') {
+          const next = title.nextElementSibling
+          if (next && next.tagName === 'SPAN' && (next.textContent || '').startsWith('age')) end = next
+        }
+        const sel = selectWholeSpans(title, end)
+        const text = getSelectionPlainText(sel)
+        assertIncludes('pdf-lampage', text, 'Lampage', sel.toString())
+      }
+
+      const spans = allGlyphSpans(mount)
+      if (spans.length >= 4) {
+        const sel = selectWholeSpans(spans[0], spans[3])
+        const text = getSelectionPlainText(sel)
+        assertIncludes('pdf-multiline-has-newline', text, '\n', sel.toString())
+      }
+
+      const page0 = mount.querySelector('[data-page-index="0"]')
+      const page1 = mount.querySelector('[data-page-index="1"]')
+      const p0spans = allGlyphSpans(page0)
+      const p1spans = allGlyphSpans(page1)
+      if (p0spans.length && p1spans.length) {
+        const sel = selectWholeSpans(p0spans[p0spans.length - 1], p1spans[0])
+        assertIncludes('pdf-cross-page-newline', getSelectionPlainText(sel), '\n', sel.toString())
+      }
+    }
+
+    // ========== 2) academic-en-sample.pdf at multiple scales ==========
+    for (const scale of [0.6, 1.0, 1.5, 2.0]) {
+      const { mount } = await renderDoc('/samples/academic-en-sample.pdf', [0, 1], scale)
+      const spans = allGlyphSpans(mount)
+      if (spans.length < 3) {
+        results.push({ name: `acad-pdf-scale-${scale}`, ok: false, actual: 'few spans', expected: '>=3' })
+        continue
+      }
+      // short
+      {
+        const sel = selectWholeSpans(spans[0], spans[0])
+        const helper = getSelectionPlainText(sel)
+        assertMatchNative(`acad-pdf-${scale}-short`, helper, sel.toString())
+        assertIncludes(`acad-pdf-${scale}-title`, helper, 'Selection', sel.toString())
+      }
+      // medium multi-line
+      {
+        const end = spans[Math.min(4, spans.length - 1)]
+        const sel = selectWholeSpans(spans[0], end)
+        const helper = getSelectionPlainText(sel)
+        assertMatchNative(`acad-pdf-${scale}-medium`, helper, sel.toString())
+        assertIncludes(`acad-pdf-${scale}-medium-nl`, helper, '\n', sel.toString())
+      }
+      // long
+      {
+        const end = spans[Math.min(12, spans.length - 1)]
+        const sel = selectWholeSpans(spans[0], end)
+        const helper = getSelectionPlainText(sel)
+        assertMatchNative(`acad-pdf-${scale}-long`, helper, sel.toString())
+      }
+      // token markers
+      const alpha = findSpan(mount, 'ALPHA-TOKEN-ONE') || spans.find(s => /ALPHA-TOKEN/.test(s.textContent || ''))
+      if (alpha) {
+        const sel = selectWholeSpans(alpha, alpha)
+        assertIncludes(`acad-pdf-${scale}-alpha`, getSelectionPlainText(sel), 'ALPHA-TOKEN', sel.toString())
+      }
+      // cross-page
+      const page0 = mount.querySelector('[data-page-index="0"]')
+      const page1 = mount.querySelector('[data-page-index="1"]')
+      const p0 = allGlyphSpans(page0)
+      const p1 = allGlyphSpans(page1)
+      if (p0.length && p1.length) {
+        const sel = selectWholeSpans(p0[p0.length - 1], p1[0])
+        const helper = getSelectionPlainText(sel)
+        assertIncludes(`acad-pdf-${scale}-crosspage`, helper, '\n', sel.toString())
+        assertMatchNative(`acad-pdf-${scale}-crosspage-native`, helper, sel.toString())
+      }
+      // CSS preview zoom mismatch (rendered at scale, preview at scale*1.25)
+      if (scale === 1.0) {
+        document.getElementById('mount').innerHTML = ''
+        const { mount: m2 } = await renderDoc('/samples/academic-en-sample.pdf', [0], 1.0, { previewScale: 1.5 })
+        const sp = allGlyphSpans(m2)
+        if (sp.length >= 5) {
+          const sel = selectWholeSpans(sp[0], sp[4])
+          const helper = getSelectionPlainText(sel)
+          assertMatchNative('acad-pdf-preview-zoom-1.5', helper, sel.toString())
+        }
+      }
+      document.getElementById('mount').innerHTML = ''
+    }
+
+    // ========== 3) TraceMonkey literature PDF (page 1) ==========
+    {
+      const { mount } = await renderDoc('/samples/tracemonkey.pdf', [0], 1.5, { disableFontFace: true })
+      const spans = allGlyphSpans(mount)
+      console.log('tracemonkey span count', spans.length, 'first', spans.slice(0, 8).map(s => s.textContent))
+      if (spans.length >= 15) {
+        const sel = selectWholeSpans(spans[0], spans[12])
+        const helper = getSelectionPlainText(sel)
+        assertMatchNative('trace-first-13', helper, sel.toString())
+        assertNoGlue('trace-no-space-before-comma', helper, '+ ,', sel.toString())
+        assertIncludes('trace-has-andreas', helper, 'Andreas Gal', sel.toString())
+      }
+      if (spans.length >= 40) {
+        const sel = selectWholeSpans(spans[10], spans[40])
+        const helper = getSelectionPlainText(sel)
+        assertMatchNative('trace-mid-range', helper, sel.toString())
+        assertNoGlue('trace-no-brace-space', helper, '{ ', sel.toString())
+      }
+      // partial word inside a long span
+      const long = spans.find(s => (s.textContent || '').length > 20)
+      if (long) {
+        const sel = selectSpanRange(long, 2, long, 10)
+        assertEq('trace-partial', getSelectionPlainText(sel), long.textContent.slice(2, 10), sel.toString())
+      }
+    }
+
+    window.__PDF_RESULTS__ = results
+    window.__PDF_READY__ = true
+    document.getElementById('log').textContent = JSON.stringify(results, null, 2)
+  </script>
+</body>
+</html>

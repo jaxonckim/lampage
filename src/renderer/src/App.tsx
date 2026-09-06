@@ -174,9 +174,11 @@ export default function App(): JSX.Element {
     closeDoc
   ])
 
+  // PDF Ctrl/Cmd+wheel zoom lives in PdfViewer (mouse-centered, transform preview).
+  // Markdown keeps a simple window-level zoom shortcut here.
   useEffect(() => {
     const onWheel = (e: WheelEvent): void => {
-      if (!(e.ctrlKey || e.metaKey) || !doc) return
+      if (!(e.ctrlKey || e.metaKey) || !doc || doc.kind !== 'md') return
       e.preventDefault()
       const next = doc.zoom + (e.deltaY < 0 ? 0.1 : -0.1)
       updateDoc(doc.id, { zoom: Math.min(3, Math.max(0.4, Number(next.toFixed(2)))) })

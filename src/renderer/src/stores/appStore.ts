@@ -15,8 +15,18 @@ function readBool(key: string, fallback: boolean): boolean {
   }
 }
 
-/** In-progress signature placement (PDF page units / points). */
-export type SignaturePlacement = {
+function revokeUrl(url: string | undefined | null): void {
+  if (!url) return
+  try {
+    URL.revokeObjectURL(url)
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Placed signature overlay (PDF page units / points). Kept until 嵌入. */
+export type SignatureOverlay = {
+  id: string
   docId: string
   pageIndex: number
   imageData: ArrayBuffer
@@ -28,6 +38,19 @@ export type SignaturePlacement = {
   yTopPt: number
   widthPt: number
   heightPt: number
+  /** width/height for Shift+resize aspect lock. */
+  aspect: number
+}
+
+/** Awaiting a click on the PDF to drop the next signature. */
+export type SignaturePending = {
+  docId: string
+  imageData: ArrayBuffer
+  mime: 'png' | 'jpg'
+  objectUrl: string
+  widthPt: number
+  heightPt: number
+  aspect: number
 }
 
 interface AppState {
@@ -45,7 +68,9 @@ interface AppState {
   status: string
   pageManageOpen: boolean
   signatureOpen: boolean
-  signaturePlacement: SignaturePlacement | null
+  signaturePending: SignaturePending | null
+  signatureOverlays: SignatureOverlay[]
+  signatureSelectedId: string | null
 
   setLeftWidth: (w: number) => void
   setRightWidth: (w: number) => void
@@ -61,8 +86,12 @@ interface AppState {
   setStatus: (s: string) => void
   setPageManageOpen: (v: boolean) => void
   setSignatureOpen: (v: boolean) => void
-  setSignaturePlacement: (p: SignaturePlacement | null) => void
-  patchSignaturePlacement: (patch: Partial<SignaturePlacement>) => void
+  setSignaturePending: (p: SignaturePending | null) => void
+  addSignatureOverlay: (o: Omit<SignatureOverlay, 'id'> & { id?: string }) => string
+  updateSignatureOverlay: (id: string, patch: Partial<SignatureOverlay>) => void
+  removeSignatureOverlay: (id: string) => void
+  clearSignatureOverlays: (docId?: string) => void
+  setSignatureSelectedId: (id: string | null) => void
   setActive: (id: string) => void
   closeDoc: (id: string) => void
   updateDoc: (id: string, patch: Partial<OpenDoc>) => void
@@ -87,7 +116,9 @@ export const useAppStore = create<AppState>((set, get) => ({
   status: '就绪',
   pageManageOpen: false,
   signatureOpen: false,
-  signaturePlacement: null,
+  signaturePending: null,
+  signatureOverlays: [],
+  signatureSelectedId: null,
 
   setLeftWidth: (w) => set({ leftWidth: Math.min(480, Math.max(160, w)) }),
   setRightWidth: (w) => set({ rightWidth: Math.min(480, Math.max(180, w)) }),
@@ -121,22 +152,66 @@ export const useAppStore = create<AppState>((set, get) => ({
   setStatus: (s) => set({ status: s }),
   setPageManageOpen: (v) => set({ pageManageOpen: v }),
   setSignatureOpen: (v) => set({ signatureOpen: v }),
-  setSignaturePlacement: (p) => {
-    const prev = get().signaturePlacement
+  setSignaturePending: (p) => {
+    const prev = get().signaturePending
     if (prev?.objectUrl && prev.objectUrl !== p?.objectUrl) {
-      try {
-        URL.revokeObjectURL(prev.objectUrl)
-      } catch {
-        /* ignore */
+      revokeUrl(prev.objectUrl)
+    }
+    set({ signaturePending: p })
+  },
+  addSignatureOverlay: (o) => {
+    const id = o.id ?? uid('sigol')
+    const overlay: SignatureOverlay = { ...o, id }
+    set((s) => ({
+      signatureOverlays: [...s.signatureOverlays, overlay],
+      signatureSelectedId: id,
+      signaturePending: null
+    }))
+    return id
+  },
+  updateSignatureOverlay: (id, patch) => {
+    set({
+      signatureOverlays: get().signatureOverlays.map((o) =>
+        o.id === id ? { ...o, ...patch } : o
+      )
+    })
+  },
+  removeSignatureOverlay: (id) => {
+    const cur = get().signatureOverlays.find((o) => o.id === id)
+    revokeUrl(cur?.objectUrl)
+    set((s) => ({
+      signatureOverlays: s.signatureOverlays.filter((o) => o.id !== id),
+      signatureSelectedId: s.signatureSelectedId === id ? null : s.signatureSelectedId
+    }))
+  },
+  clearSignatureOverlays: (docId) => {
+    const list = get().signatureOverlays
+    const keep: SignatureOverlay[] = []
+    for (const o of list) {
+      if (docId && o.docId !== docId) {
+        keep.push(o)
+      } else {
+        revokeUrl(o.objectUrl)
       }
     }
-    set({ signaturePlacement: p })
+    const pending = get().signaturePending
+    if (pending && (!docId || pending.docId === docId)) {
+      revokeUrl(pending.objectUrl)
+      set({
+        signatureOverlays: keep,
+        signaturePending: null,
+        signatureSelectedId: null
+      })
+    } else {
+      set({
+        signatureOverlays: keep,
+        signatureSelectedId: keep.some((o) => o.id === get().signatureSelectedId)
+          ? get().signatureSelectedId
+          : null
+      })
+    }
   },
-  patchSignaturePlacement: (patch) => {
-    const cur = get().signaturePlacement
-    if (!cur) return
-    set({ signaturePlacement: { ...cur, ...patch } })
-  },
+  setSignatureSelectedId: (id) => set({ signatureSelectedId: id }),
   setActive: (id) => {
     const doc = get().docs.find((d) => d.id === id)
     set({
@@ -151,21 +226,10 @@ export const useAppStore = create<AppState>((set, get) => ({
       const ok = window.confirm(`「${target.name}」有未保存的更改，确定关闭？`)
       if (!ok) return
     }
-    const placement = get().signaturePlacement
-    if (placement?.docId === id) {
-      try {
-        URL.revokeObjectURL(placement.objectUrl)
-      } catch {
-        /* ignore */
-      }
-    }
+    get().clearSignatureOverlays(id)
     const docs = get().docs.filter((d) => d.id !== id)
     const activeId = get().activeId === id ? docs[0]?.id ?? null : get().activeId
-    set({
-      docs,
-      activeId,
-      signaturePlacement: placement?.docId === id ? null : placement
-    })
+    set({ docs, activeId })
   },
   updateDoc: (id, patch) =>
     set({

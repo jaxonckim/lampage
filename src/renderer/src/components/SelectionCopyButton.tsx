@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { getSelectionPlainText, writeClipboardText } from '../utils/selectionText'
 
 function selectionRootEl(node: Node | null): HTMLElement | null {
   if (!node) return null
@@ -8,6 +9,7 @@ function selectionRootEl(node: Node | null): HTMLElement | null {
 /**
  * Floating “复制” button near the current text selection inside the viewer.
  * Works for PDF text layer and Markdown (read + edit).
+ * Uses the same plain-text builder as Ctrl+C for PDF selections.
  */
 export default function SelectionCopyButton(): JSX.Element | null {
   const [visible, setVisible] = useState(false)
@@ -29,8 +31,8 @@ export default function SelectionCopyButton(): JSX.Element | null {
         setText('')
         return
       }
-      const raw = sel.toString()
-      if (!raw.trim()) {
+      const plain = getSelectionPlainText(sel)
+      if (!plain.trim()) {
         setVisible(false)
         setText('')
         return
@@ -50,7 +52,7 @@ export default function SelectionCopyButton(): JSX.Element | null {
         setVisible(false)
         return
       }
-      setText(raw)
+      setText(plain)
       setPos({ x: rect.left + rect.width / 2, y: Math.max(8, rect.top) })
       setVisible(true)
     }
@@ -68,7 +70,6 @@ export default function SelectionCopyButton(): JSX.Element | null {
     const onScroll = (): void => {
       setVisible((v) => {
         if (v) {
-          // hide on scroll; avoids stale position
           return false
         }
         return v
@@ -114,18 +115,9 @@ export default function SelectionCopyButton(): JSX.Element | null {
       onClick={async (e) => {
         e.preventDefault()
         e.stopPropagation()
-        try {
-          await navigator.clipboard.writeText(text)
-        } catch {
-          const ta = document.createElement('textarea')
-          ta.value = text
-          ta.style.position = 'fixed'
-          ta.style.left = '-9999px'
-          document.body.appendChild(ta)
-          ta.select()
-          document.execCommand('copy')
-          ta.remove()
-        }
+        // Re-read at click time so text stays in sync with the live selection
+        const live = getSelectionPlainText() || text
+        await writeClipboardText(live)
         window.getSelection()?.removeAllRanges()
         setVisible(false)
         setText('')

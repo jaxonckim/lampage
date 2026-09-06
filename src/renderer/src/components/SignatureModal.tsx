@@ -24,7 +24,7 @@ export default function SignatureModal({ doc }: Props): JSX.Element {
   const open = useAppStore((s) => s.signatureOpen)
   const setOpen = useAppStore((s) => s.setSignatureOpen)
   const setStatus = useAppStore((s) => s.setStatus)
-  const setPlacement = useAppStore((s) => s.setSignaturePlacement)
+  const setPending = useAppStore((s) => s.setSignaturePending)
   const [sigs, setSigs] = useState<SigItem[]>([])
   const urlsRef = useRef<string[]>([])
 
@@ -54,7 +54,7 @@ export default function SignatureModal({ doc }: Props): JSX.Element {
 
   const disabled = !doc || doc.kind !== 'pdf'
 
-  const beginPlace = async (s: SigItem): Promise<void> => {
+  const beginPlaceMode = async (s: SigItem): Promise<void> => {
     if (!doc || doc.kind !== 'pdf') {
       setStatus('请先打开 PDF')
       return
@@ -66,32 +66,22 @@ export default function SignatureModal({ doc }: Props): JSX.Element {
       /* use defaults */
     }
     const size = sizeForImage(natural.w, natural.h)
-    const pageIndex = doc.currentPage
-    const scale = doc.zoom * 1.25
-    const pageEl = document.getElementById(`pdf-page-${doc.id}-${pageIndex}`)
-    const pageW = pageEl ? pageEl.clientWidth / scale : 595
-    const pageH = pageEl ? pageEl.clientHeight / scale : 842
-    const widthPt = Math.min(size.width, pageW * 0.9)
-    const heightPt = Math.min(size.height, pageH * 0.9)
-    // Default: lower-right-ish, but freely movable afterwards
-    const xPt = Math.max(0, pageW - widthPt - 36)
-    const yTopPt = Math.max(0, pageH - heightPt - 36)
+    const aspect =
+      natural.w > 0 && natural.h > 0 ? natural.w / natural.h : size.width / size.height
 
-    // Fresh object URL owned by placement (modal list URLs get revoked on refresh)
+    // Fresh object URL owned by pending (modal list URLs get revoked on refresh)
     const objectUrl = URL.createObjectURL(new Blob([s.data], { type: `image/${s.mime}` }))
-    setPlacement({
+    setPending({
       docId: doc.id,
-      pageIndex,
       imageData: s.data.slice(0),
       mime: s.mime,
       objectUrl,
-      xPt,
-      yTopPt,
-      widthPt,
-      heightPt
+      widthPt: size.width,
+      heightPt: size.height,
+      aspect
     })
     setOpen(false)
-    setStatus(`在第 ${pageIndex + 1} 页调整签名位置与大小，然后确认嵌入`)
+    setStatus('点击 PDF 页面任意位置放置签名，可继续添加多个；完成后点「嵌入」')
   }
 
   return (
@@ -99,7 +89,7 @@ export default function SignatureModal({ doc }: Props): JSX.Element {
       <p className="modal-hint">
         {disabled
           ? '请打开 PDF 后放置签名。可先绘制或导入签名图片。'
-          : `选择签名后，在第 ${(doc?.currentPage ?? 0) + 1} 页自由拖放并调整大小，确认后扁平化嵌入（该页将栅格化）。`}
+          : '选择签名后进入放置模式：在页面上点击落点，可拖动/缩放调整；支持多个签名，统一点「嵌入」烧录。'}
       </p>
       <SignaturePad onSaved={refreshSigs} />
       <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
@@ -127,10 +117,11 @@ export default function SignatureModal({ doc }: Props): JSX.Element {
         {sigs.map((s) => (
           <img
             key={s.id}
+            className="sig-list-item"
             src={s.url}
             alt={s.name}
             title={`放置: ${s.name}`}
-            onClick={() => void beginPlace(s)}
+            onClick={() => void beginPlaceMode(s)}
           />
         ))}
       </div>

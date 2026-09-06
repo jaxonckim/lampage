@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>selection copy fixture</title>
+  <style>
+    body { font-family: "Courier New", Courier, monospace; margin: 20px; }
+    .pdf-viewer { border: 1px solid #ccc; display: inline-block; margin-bottom: 24px; vertical-align: top; }
+    .pdf-page-wrap { position: relative; }
+    .textLayer, .pdf-text-layer {
+      position: relative;
+      width: 520px;
+      height: 220px;
+      line-height: 1;
+      user-select: text;
+      transform-origin: 0 0;
+    }
+    .textLayer span, .pdf-text-layer span,
+    .textLayer br, .pdf-text-layer br {
+      position: absolute;
+      white-space: pre;
+      transform-origin: 0% 0%;
+      cursor: text;
+      font-size: 16px;
+      font-family: "Courier New", Courier, monospace;
+    }
+    .times span, .times br {
+      font-family: Times, "Times New Roman", serif;
+      font-size: 14px;
+    }
+    .endOfContent { display: block; }
+  </style>
+</head>
+<body>
+  <div class="pdf-viewer" id="viewer">
+    <div class="pdf-page-wrap" data-page-index="0">
+      <div class="textLayer pdf-text-layer" id="layer0">
+        <span id="sHello" style="left:10px; top:10px;">Hello</span>
+        <span id="sWorld" style="left:68px; top:10px;">World</span>
+        <br style="left:0; top:28px;" />
+        <span id="sLine" style="left:10px; top:40px;">Line</span>
+        <span id="sTwo" style="left:58px; top:40px;">two</span>
+        <br style="left:0; top:58px;" />
+        <span id="sLamp" style="left:10px; top:70px;">Lamp</span>
+        <span id="sAge" style="left:48.4px; top:70px;">age</span>
+        <span id="sFind" style="left:96px; top:70px;">find-me</span>
+        <br style="left:0; top:88px;" />
+        <span id="sToken" style="left:10px; top:100px;">unique-token-alpha</span>
+        <div class="endOfContent" style="left:0; top:200px; width:100%; height:1px;"></div>
+      </div>
+    </div>
+    <div class="pdf-page-wrap" data-page-index="1" style="margin-top: 24px;">
+      <div class="textLayer pdf-text-layer" id="layer1" style="height: 80px;">
+        <span id="sPage2" style="left:10px; top:10px;">Page Two</span>
+        <br style="left:0; top:28px;" />
+        <span id="sBeta" style="left:10px; top:40px;">unique-token-beta</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="pdf-viewer" id="academic">
+    <div class="pdf-page-wrap" data-page-index="0">
+      <div class="textLayer pdf-text-layer times" id="acadLayer" style="height: 240px; width: 560px;"></div>
+    </div>
+  </div>
+
+  <pre id="log"></pre>
+  <script type="module">
+    import { getSelectionPlainText } from './selectionText.bundle.js'
+
+    function el(id) { return document.getElementById(id) }
+    function textNode(id) { return el(id).firstChild }
+
+    function selectNodes(startNode, startOffset, endNode, endOffset) {
+      const sel = window.getSelection()
+      sel.removeAllRanges()
+      const r = document.createRange()
+      r.setStart(startNode, startOffset)
+      r.setEnd(endNode, endOffset)
+      sel.addRange(r)
+      return sel
+    }
+
+    // Build academic layer with measured word gaps (word-level spans like literature PDFs)
+    const acad = el('acadLayer')
+    const measureCanvas = document.createElement('canvas')
+    const mctx = measureCanvas.getContext('2d')
+    mctx.font = '14px Times, "Times New Roman", serif'
+    const ids = {}
+    function placeWords(words, x0, y, idPrefix, wordGap = 4.2) {
+      let x = x0
+      const spans = []
+      for (let i = 0; i < words.length; i++) {
+        const w = words[i]
+        const sp = document.createElement('span')
+        const id = idPrefix + i
+        sp.id = id
+        sp.textContent = w
+        sp.style.left = x + 'px'
+        sp.style.top = y + 'px'
+        acad.appendChild(sp)
+        ids[id] = sp
+        spans.push(sp)
+        x += mctx.measureText(w).width + (i < words.length - 1 ? wordGap : 0)
+      }
+      return spans
+    }
+    function addBr(top) {
+      const br = document.createElement('br')
+      br.style.left = '0'
+      br.style.top = top + 'px'
+      acad.appendChild(br)
+    }
+    const L1 = placeWords(['The', 'efficient', 'fluid', 'affiliation'], 10, 10, 'aW')
+    addBr(26)
+    {
+      const sp = document.createElement('span')
+      sp.id = 'aExperi'
+      sp.textContent = 'experi\u00AD'
+      sp.style.left = '10px'
+      sp.style.top = '40px'
+      acad.appendChild(sp)
+    }
+    addBr(56)
+    {
+      const sp = document.createElement('span')
+      sp.id = 'aMent'
+      sp.textContent = 'ment'
+      sp.style.left = '10px'
+      sp.style.top = '70px'
+      acad.appendChild(sp)
+    }
+    addBr(86)
+    {
+      const sp = document.createElement('span')
+      sp.id = 'aRepre'
+      sp.textContent = 'represen-'
+      sp.style.left = '10px'
+      sp.style.top = '100px'
+      acad.appendChild(sp)
+    }
+    addBr(116)
+    {
+      const sp = document.createElement('span')
+      sp.id = 'aTation'
+      sp.textContent = 'tation'
+      sp.style.left = '10px'
+      sp.style.top = '130px'
+      acad.appendChild(sp)
+    }
+    addBr(146)
+    const left = placeWords(['Left', 'column', 'alpha'], 10, 160, 'aL')
+    const right = placeWords(['Right', 'column', 'beta'], 300, 160, 'aR')
+    addBr(176)
+    // Author line: Name + flush markers + ", Other"
+    {
+      const gal = document.createElement('span')
+      gal.id = 'aGal'
+      gal.textContent = 'Andreas Gal'
+      gal.style.left = '10px'
+      gal.style.top = '190px'
+      acad.appendChild(gal)
+      let x = 10 + mctx.measureText('Andreas Gal').width
+      const star = document.createElement('span')
+      star.id = 'aStar'
+      star.textContent = '∗'
+      star.style.left = x + 'px'
+      star.style.top = '188px'
+      star.style.fontSize = '10px'
+      acad.appendChild(star)
+      x += 8
+      const plus = document.createElement('span')
+      plus.id = 'aPlus'
+      plus.textContent = '+'
+      plus.style.left = x + 'px'
+      plus.style.top = '188px'
+      plus.style.fontSize = '10px'
+      acad.appendChild(plus)
+      x += 8
+      const brendan = document.createElement('span')
+      brendan.id = 'aBrendan'
+      brendan.textContent = ', Brendan Eich'
+      brendan.style.left = x + 'px'
+      brendan.style.top = '190px'
+      acad.appendChild(brendan)
+    }
+
+    const results = []
+    function assertEq(name, actual, expected, native) {
+      const ok = actual === expected
+      results.push({ name, ok, actual, expected, native: native ?? null })
+      console.log(ok ? 'PASS' : 'FAIL', name, JSON.stringify({ actual, expected, native }))
+    }
+
+    // --- legacy basic ---
+    {
+      const sel = selectNodes(textNode('sHello'), 0, textNode('sWorld'), 5)
+      assertEq('hello-world-gap', getSelectionPlainText(sel), 'Hello World', sel.toString())
+    }
+    {
+      const sel = selectNodes(textNode('sHello'), 0, textNode('sTwo'), 3)
+      assertEq('multiline-br', getSelectionPlainText(sel), 'Hello World\nLine two', sel.toString())
+    }
+    {
+      const sel = selectNodes(textNode('sLamp'), 0, textNode('sAge'), 3)
+      assertEq('multispan-word', getSelectionPlainText(sel), 'Lampage', sel.toString())
+    }
+    {
+      const sel = selectNodes(textNode('sLamp'), 0, textNode('sFind'), 7)
+      assertEq('lampage-find-me', getSelectionPlainText(sel), 'Lampage find-me', sel.toString())
+    }
+    {
+      const sel = selectNodes(textNode('sToken'), 7, textNode('sToken'), 12)
+      assertEq('partial-span', getSelectionPlainText(sel), 'token', sel.toString())
+    }
+    {
+      const sel = selectNodes(textNode('sLamp'), 2, textNode('sAge'), 2)
+      assertEq('partial-multispan', getSelectionPlainText(sel), 'mpag', sel.toString())
+    }
+    {
+      const sel = selectNodes(textNode('sToken'), 0, textNode('sPage2'), 8)
+      assertEq('cross-page', getSelectionPlainText(sel), 'unique-token-alpha\nPage Two', sel.toString())
+    }
+    {
+      const sel = selectNodes(textNode('sWorld'), 0, textNode('sWorld'), 5)
+      assertEq('single-span', getSelectionPlainText(sel), 'World', sel.toString())
+    }
+
+    // --- academic synthetic ---
+    {
+      const sel = selectNodes(L1[0].firstChild, 0, L1[1].firstChild, L1[1].textContent.length)
+      assertEq('acad-two-words', getSelectionPlainText(sel), 'The efficient', sel.toString())
+    }
+    {
+      const sel = selectNodes(L1[0].firstChild, 0, L1[3].firstChild, L1[3].textContent.length)
+      assertEq('acad-whole-line', getSelectionPlainText(sel), 'The efficient fluid affiliation', sel.toString())
+    }
+    {
+      const sel = selectNodes(L1[1].firstChild, 2, L1[1].firstChild, 7)
+      assertEq('acad-partial-word', getSelectionPlainText(sel), 'ficie', sel.toString())
+    }
+    {
+      const sel = selectNodes(textNode('aExperi'), 0, textNode('aMent'), 4)
+      assertEq('acad-soft-hyphen-join', getSelectionPlainText(sel), 'experiment', sel.toString())
+    }
+    {
+      const sel = selectNodes(textNode('aRepre'), 0, textNode('aTation'), 6)
+      assertEq('acad-hard-hyphen-keep', getSelectionPlainText(sel), 'represen-\ntation', sel.toString())
+    }
+    {
+      const sel = selectNodes(left[0].firstChild, 0, left[2].firstChild, left[2].textContent.length)
+      assertEq('acad-left-col', getSelectionPlainText(sel), 'Left column alpha', sel.toString())
+    }
+    {
+      const sel = selectNodes(left[0].firstChild, 0, right[2].firstChild, right[2].textContent.length)
+      assertEq('acad-cross-col', getSelectionPlainText(sel), 'Left column alpha Right column beta', sel.toString())
+    }
+    {
+      const sel = selectNodes(textNode('aGal'), 0, textNode('aBrendan'), textNode('aBrendan').length)
+      assertEq('acad-author-markers', getSelectionPlainText(sel), 'Andreas Gal∗+, Brendan Eich', sel.toString())
+    }
+
+    // --- zoom via CSS transform (preview-zoom analogue) ---
+    for (const scale of [0.6, 1.5, 2.0]) {
+      acad.style.transform = `scale(${scale})`
+      void acad.getBoundingClientRect()
+      {
+        const sel = selectNodes(L1[0].firstChild, 0, L1[3].firstChild, L1[3].textContent.length)
+        assertEq(`acad-zoom-${scale}-line`, getSelectionPlainText(sel), 'The efficient fluid affiliation', sel.toString())
+      }
+      {
+        const sel = selectNodes(textNode('aExperi'), 0, textNode('aMent'), 4)
+        assertEq(`acad-zoom-${scale}-shy`, getSelectionPlainText(sel), 'experiment', sel.toString())
+      }
+      {
+        const sel = selectNodes(textNode('aGal'), 0, textNode('aBrendan'), textNode('aBrendan').length)
+        assertEq(`acad-zoom-${scale}-authors`, getSelectionPlainText(sel), 'Andreas Gal∗+, Brendan Eich', sel.toString())
+      }
+    }
+    acad.style.transform = ''
+
+    window.__RESULTS__ = results
+    document.getElementById('log').textContent = JSON.stringify(results, null, 2)
+  </script>
+</body>
+</html>
