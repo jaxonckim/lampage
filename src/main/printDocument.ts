@@ -3,11 +3,13 @@
  *
  * PDF: write bytes to a temp file, open a BrowserWindow on file://PDF,
  *      then webContents.print() — Chromium prints every page of the PDF.
- * MD:  write a chrome-free HTML document to temp, print that window.
+ * MD/HTML: render chrome-free HTML to PDF via a hidden BrowserWindow +
+ *      printToPDF, then reuse the same PDF print path (system dialog).
  *
- * Windows: the system print dialog needs a visible, focused BrowserWindow.
- * Never use opacity 0 / showInactive — that leaves a ghost taskbar entry and
- * the print dialog never surfaces properly.
+ * Windows: the system print dialog needs a visible, focused BrowserWindow
+ * (for the PDF viewer path). Never use opacity 0 / showInactive — that leaves
+ * a ghost taskbar entry and the print dialog never surfaces properly.
+ * MD/HTML conversion windows stay hidden; only the PDF print window is shown.
  */
 import { BrowserWindow, app } from 'electron'
 import { join } from 'path'
@@ -225,7 +227,7 @@ async function printTempFile(
 }
 
 /**
- * Print every page of a PDF via Chromium's native PDF viewer in a hidden window.
+ * Print every page of a PDF via Chromium's native PDF viewer in a dedicated window.
  */
 export async function printPdfDocument(data: ArrayBuffer | Uint8Array): Promise<boolean> {
   const buf = toBuffer(data)
@@ -243,13 +245,36 @@ export async function printPdfDocument(data: ArrayBuffer | Uint8Array): Promise<
   return printTempFile(filePath, { kind: 'pdf', pageCount })
 }
 
+/**
+ * Render a chrome-free HTML file to PDF bytes in a hidden BrowserWindow.
+ * Window stays hidden — users never see a button-less HTML preview.
+ * Temp HTML is always unlinked when this returns (success or failure).
+ */
+async function renderHtmlFileToPdf(filePath: string): Promise<Buffer> {
+  const win = createPrintWindow()
+  try {
+    await win.loadURL(pathToFileURL(filePath).href)
+    // Layout settle while paintWhenInitiallyHidden paints off-screen
+    await new Promise((r) => setTimeout(r, 300))
+    const pdfData = await win.webContents.printToPDF({
+      printBackground: true
+    })
+    return Buffer.from(pdfData)
+  } finally {
+    if (!win.isDestroyed()) win.destroy()
+    await safeUnlink(filePath)
+  }
+}
+
 export async function printMdDocument(html: string, title = 'document'): Promise<boolean> {
   if (typeof html !== 'string') throw new Error('Invalid MD html')
   if (html.length > MAX_MD_HTML) throw new Error('MD html too large')
 
   const filePath = tempPath('html')
   await writeFile(filePath, buildMdPrintHtml(html, title || 'document'), 'utf8')
-  return printTempFile(filePath, { kind: 'md', pageCount: 1 })
+  // Convert HTML → PDF hidden, then reuse the working PDF print dialog path
+  const pdfBuf = await renderHtmlFileToPdf(filePath)
+  return printPdfDocument(pdfBuf)
 }
 
 export async function printHtmlDocument(
@@ -265,12 +290,10 @@ export async function printHtmlDocument(
       ? html
       : buildMdPrintHtml(html, opts?.title || 'document')
   await writeFile(filePath, titled, 'utf8')
-  const pageCount =
-    opts?.pageCount ??
-    (titled.match(/class="[^"]*pdf-print-page[^"]*"/g)?.length ||
-      titled.match(/class='[^']*pdf-print-page[^']*'/g)?.length ||
-      1)
-  return printTempFile(filePath, { kind: 'html', pageCount })
+  // Convert HTML → PDF hidden, then reuse the working PDF print dialog path.
+  // pageCount is recomputed from the generated PDF in printPdfDocument.
+  const pdfBuf = await renderHtmlFileToPdf(filePath)
+  return printPdfDocument(pdfBuf)
 }
 
 export async function runPrintJob(payload: PrintPayload): Promise<boolean> {
