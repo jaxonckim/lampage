@@ -75,6 +75,8 @@ export default function PdfViewer({
     mx: number
     my: number
   } | null>(null)
+  /** Horizontal centering inset (px) of .pdf-pages within the sizer; part of zoom coords. */
+  const centerPadRef = useRef(0)
   const updateDoc = useAppStore((s) => s.updateDoc)
   const matchIndex = useRef(0)
   const matchesRef = useRef<FindMatch[]>([])
@@ -100,31 +102,41 @@ export default function PdfViewer({
     const sizer = sizerRef.current
     const pages = pagesRef.current
     if (!sizer || !pages) return
+    const root = sizer.parentElement
     const ratio = previewZoom / renderedZoom
     const baseW = pages.scrollWidth || pages.offsetWidth
     const baseH = pages.scrollHeight || pages.offsetHeight
+    const dispW = baseW * (Math.abs(ratio - 1) < 0.001 ? 1 : ratio)
+    const dispH = baseH * (Math.abs(ratio - 1) < 0.001 ? 1 : ratio)
+    // Symmetric center inset when content is narrower than the viewport.
+    // Applied as pages.left (absolute kids ignore sizer padding). Included in
+    // sizer width so preview+settle share one scroll coordinate model.
+    const pad = root ? Math.max(0, Math.floor((root.clientWidth - dispW) / 2)) : 0
+    centerPadRef.current = pad
+    pages.style.left = `${pad}px`
     // Sizer always owns scroll dimensions (pages are position:absolute).
     // Keep transform at ratio≈1 only after settle scroll is applied — callers
     // that clear use applyPreviewChrome(z,z) once new DOM + scroll are ready.
     if (Math.abs(ratio - 1) < 0.001) {
       pages.style.transform = ''
-      sizer.style.width = `${baseW}px`
-      sizer.style.height = `${baseH}px`
+      sizer.style.width = `${dispW + 2 * pad}px`
+      sizer.style.height = `${dispH}px`
       return
     }
     pages.style.transformOrigin = '0 0'
     pages.style.transform = `scale(${ratio})`
-    sizer.style.width = `${baseW * ratio}px`
-    sizer.style.height = `${baseH * ratio}px`
+    sizer.style.width = `${dispW + 2 * pad}px`
+    sizer.style.height = `${dispH}px`
   }, [])
 
-  /** Keep content point under cursor: scroll = content * (preview/rendered) - mouse */
+  /** Keep content point under cursor: scroll = pad + content*(preview/rendered) - mouse */
   const zoomScrollToAnchor = useCallback(
     (container: HTMLElement, renderedZoom: number, previewZoom: number) => {
       const anchor = scrollAnchorRef.current
       if (!anchor) return
       const ratio = previewZoom / renderedZoom
-      container.scrollLeft = anchor.contentX * ratio - anchor.mx
+      const pad = centerPadRef.current
+      container.scrollLeft = pad + anchor.contentX * ratio - anchor.mx
       container.scrollTop = anchor.contentY * ratio - anchor.my
     },
     []
@@ -228,13 +240,16 @@ export default function PdfViewer({
 
       const progressive = opts.progressive === true && !opts.preserveScroll
 
-      // Capture scroll metrics from live preview BEFORE any DOM swap
+      // Capture scroll metrics from live preview BEFORE any DOM swap.
+      // contentX/Y are in rendered-page space (exclude horizontal center pad).
       const oldRendered = renderedZoomRef.current
       const oldPreview = previewZoomRef.current
       const oldRatio = oldRendered > 0 ? oldPreview / oldRendered : 1
+      const oldPad = centerPadRef.current
       const mx = root.clientWidth / 2
       const my = root.clientHeight / 2
-      const centerContentX = (root.scrollLeft + mx) / Math.max(oldRatio, 1e-6)
+      const centerContentX =
+        (root.scrollLeft + mx - oldPad) / Math.max(oldRatio, 1e-6)
       const centerContentY = (root.scrollTop + my) / Math.max(oldRatio, 1e-6)
       const scaleFactor = oldRendered > 0 ? zoom / oldRendered : 1
       const anchor = scrollAnchorRef.current
@@ -246,7 +261,12 @@ export default function PdfViewer({
       applyZoomChrome(wrap, zoom)
       sizer.appendChild(wrap)
 
-      const commitDom = (scrollLeft: number | null, scrollTop: number | null): void => {
+      const commitDom = (
+        contentX: number | null,
+        contentY: number | null,
+        anchorMx: number,
+        anchorMy: number
+      ): void => {
         // Keep old preview on screen until this moment; swap + scroll same frame.
         root.replaceChildren(sizer)
         sizerRef.current = sizer
@@ -254,22 +274,32 @@ export default function PdfViewer({
         renderedZoomRef.current = zoom
         previewZoomRef.current = zoom
         applyPreviewChrome(zoom, zoom)
-        if (scrollLeft != null && scrollTop != null) {
-          setScrollStable(root, scrollLeft, scrollTop)
+        if (contentX != null && contentY != null) {
+          const pad = centerPadRef.current
+          setScrollStable(root, pad + contentX - anchorMx, contentY - anchorMy)
         }
       }
 
-      const resolveScroll = (): { left: number; top: number } | null => {
+      const resolveContentScroll = (): {
+        contentX: number
+        contentY: number
+        mx: number
+        my: number
+      } | null => {
         if (opts.preserveScroll && anchor) {
           return {
-            left: anchor.contentX * scaleFactor - anchor.mx,
-            top: anchor.contentY * scaleFactor - anchor.my
+            contentX: anchor.contentX * scaleFactor,
+            contentY: anchor.contentY * scaleFactor,
+            mx: anchor.mx,
+            my: anchor.my
           }
         }
         if (opts.preserveScroll) {
           return {
-            left: centerContentX * scaleFactor - mx,
-            top: centerContentY * scaleFactor - my
+            contentX: centerContentX * scaleFactor,
+            contentY: centerContentY * scaleFactor,
+            mx,
+            my
           }
         }
         return null
@@ -289,7 +319,7 @@ export default function PdfViewer({
 
       if (gen !== renderGen.current) return
 
-      const scroll = resolveScroll()
+      const scroll = resolveContentScroll()
       if (opts.preserveScroll) {
         scrollAnchorRef.current = null
       }
@@ -305,7 +335,12 @@ export default function PdfViewer({
 
       if (progressive) {
         // First paint ASAP — remaining pages append in background
-        commitDom(scroll?.left ?? null, scroll?.top ?? null)
+        commitDom(
+          scroll?.contentX ?? null,
+          scroll?.contentY ?? null,
+          scroll?.mx ?? mx,
+          scroll?.my ?? my
+        )
         for (let i = 1; i <= firstCount; i++) maybeScrollToPage(i - 1)
         if (gen === renderGen.current) applyFindRef.current()
 
@@ -334,7 +369,12 @@ export default function PdfViewer({
 
       // Bridge: if we still have a live preview, keep its transform until swap frame.
       // New tree is already at settle zoom; commitDom clears transform + sets scroll together.
-      commitDom(scroll?.left ?? null, scroll?.top ?? null)
+      commitDom(
+        scroll?.contentX ?? null,
+        scroll?.contentY ?? null,
+        scroll?.mx ?? mx,
+        scroll?.my ?? my
+      )
 
       if (opts.scrollToPage != null && !opts.preserveScroll) {
         const target = document.getElementById(
@@ -430,8 +470,9 @@ export default function PdfViewer({
       if (next === prevPreview) return
 
       const prevRatio = prevPreview / rendered
+      const prevPad = centerPadRef.current
       scrollAnchorRef.current = {
-        contentX: (root.scrollLeft + mx) / prevRatio,
+        contentX: (root.scrollLeft + mx - prevPad) / prevRatio,
         contentY: (root.scrollTop + my) / prevRatio,
         mx,
         my
@@ -456,6 +497,26 @@ export default function PdfViewer({
       if (settleTimerRef.current != null) window.clearTimeout(settleTimerRef.current)
     }
   }, [applyPreviewChrome, zoomScrollToAnchor, updateDoc])
+
+  // Re-center when the viewer is resized (sidebar, window); keep content under the same point.
+  useEffect(() => {
+    const root = containerRef.current
+    if (!root || typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(() => {
+      if (!sizerRef.current || !pagesRef.current) return
+      const oldPad = centerPadRef.current
+      const midX = root.clientWidth / 2
+      const ratio =
+        previewZoomRef.current / Math.max(renderedZoomRef.current, 1e-6)
+      const contentX = (root.scrollLeft + midX - oldPad) / Math.max(ratio, 1e-6)
+      // Re-apply chrome at current preview ratio so pad matches new viewport.
+      applyPreviewChrome(renderedZoomRef.current, previewZoomRef.current)
+      const pad = centerPadRef.current
+      root.scrollLeft = pad + contentX * ratio - midX
+    })
+    ro.observe(root)
+    return () => ro.disconnect()
+  }, [applyPreviewChrome])
 
   // Intercept copy so Ctrl+C matches visual PDF selection
   useEffect(() => {

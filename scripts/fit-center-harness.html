@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="utf-8" />
+  <title>fit-center harness</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; font: 13px/1.4 system-ui, sans-serif; }
+    #toolbar { padding: 8px; display: flex; gap: 8px; align-items: center; border-bottom: 1px solid #ddd; }
+    #viewer {
+      width: 800px;
+      height: 600px;
+      overflow: auto;
+      background: #f3efe8;
+      position: relative;
+    }
+    .pdf-zoom-sizer { position: relative; margin: 0; }
+    .pdf-zoom-sizer .pdf-pages {
+      position: absolute;
+      left: 0;
+      top: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      transform-origin: 0 0;
+    }
+    .pdf-page-wrap {
+      background: #fff;
+      box-shadow: 0 1px 3px rgba(0,0,0,.12);
+      position: relative;
+    }
+    #log { white-space: pre-wrap; padding: 8px; font-family: ui-monospace, monospace; font-size: 12px; }
+  </style>
+</head>
+<body>
+  <div id="toolbar">
+    <button id="btn-fit-width" type="button">适应宽度</button>
+    <button id="btn-fit-page" type="button">适应页面</button>
+    <span id="zoom-label">100%</span>
+  </div>
+  <div id="viewer" class="viewer pdf-viewer"></div>
+  <pre id="log"></pre>
+  <script type="module">
+    const CSS_BASE = 1.25
+    const ZOOM_MIN = 0.4
+    const ZOOM_MAX = 3
+    const PAD_TOP = 24
+    const PAD_X = 16
+    const PAD_BOTTOM = 48
+    const PAGE_GAP = 16
+    // Fake letter page at CSS_BASE=1.25 → 612*1.25 x 792*1.25
+    const PAGE_W1 = 612 * CSS_BASE
+    const PAGE_H1 = 792 * CSS_BASE
+
+    const viewer = document.getElementById('viewer')
+    const logEl = document.getElementById('log')
+    const zoomLabel = document.getElementById('zoom-label')
+
+    let renderedZoom = 1
+    let previewZoom = 1
+    let centerPad = 0
+    let sizer = null
+    let pages = null
+    let scrollAnchor = null
+    let settleTimer = null
+    let storeZoom = 1
+
+    function clampZoom(z) {
+      return Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, Number(z.toFixed(3))))
+    }
+    function applyZoomChrome(wrap, zoom) {
+      wrap.style.padding = `${PAD_TOP * zoom}px ${PAD_X * zoom}px ${PAD_BOTTOM * zoom}px`
+      wrap.style.gap = `${PAGE_GAP * zoom}px`
+    }
+    function applyPreviewChrome(rz, pz) {
+      if (!sizer || !pages) return
+      const ratio = pz / rz
+      const baseW = pages.scrollWidth || pages.offsetWidth
+      const baseH = pages.scrollHeight || pages.offsetHeight
+      const near1 = Math.abs(ratio - 1) < 0.001
+      const dispW = baseW * (near1 ? 1 : ratio)
+      const dispH = baseH * (near1 ? 1 : ratio)
+      const pad = Math.max(0, Math.floor((viewer.clientWidth - dispW) / 2))
+      centerPad = pad
+      pages.style.left = `${pad}px`
+      if (near1) {
+        pages.style.transform = ''
+        sizer.style.width = `${dispW + 2 * pad}px`
+        sizer.style.height = `${dispH}px`
+        return
+      }
+      pages.style.transformOrigin = '0 0'
+      pages.style.transform = `scale(${ratio})`
+      sizer.style.width = `${dispW + 2 * pad}px`
+      sizer.style.height = `${dispH}px`
+    }
+    function zoomScrollToAnchor(rz, pz) {
+      if (!scrollAnchor) return
+      const ratio = pz / rz
+      viewer.scrollLeft = centerPad + scrollAnchor.contentX * ratio - scrollAnchor.mx
+      viewer.scrollTop = scrollAnchor.contentY * ratio - scrollAnchor.my
+    }
+    function setScrollStable(left, top) {
+      viewer.scrollLeft = left
+      viewer.scrollTop = top
+    }
+    function buildPages(zoom) {
+      const nextSizer = document.createElement('div')
+      nextSizer.className = 'pdf-zoom-sizer'
+      const wrap = document.createElement('div')
+      wrap.className = 'pdf-pages'
+      applyZoomChrome(wrap, zoom)
+      const page = document.createElement('div')
+      page.className = 'pdf-page-wrap'
+      page.id = 'pdf-page-doc-0'
+      page.dataset.pageIndex = '0'
+      page.style.width = `${PAGE_W1 * zoom}px`
+      page.style.height = `${PAGE_H1 * zoom}px`
+      page.textContent = `page z=${zoom}`
+      wrap.appendChild(page)
+      nextSizer.appendChild(wrap)
+      return { sizer: nextSizer, wrap, page }
+    }
+    function settleTo(zoom, opts = { preserveScroll: true }) {
+      const oldRendered = renderedZoom
+      const oldPreview = previewZoom
+      const oldRatio = oldRendered > 0 ? oldPreview / oldRendered : 1
+      const oldPad = centerPad
+      const mx = viewer.clientWidth / 2
+      const my = viewer.clientHeight / 2
+      const centerContentX = (viewer.scrollLeft + mx - oldPad) / Math.max(oldRatio, 1e-6)
+      const centerContentY = (viewer.scrollTop + my) / Math.max(oldRatio, 1e-6)
+      const scaleFactor = oldRendered > 0 ? zoom / oldRendered : 1
+      const anchor = scrollAnchor
+
+      const built = buildPages(zoom)
+      let contentX = null
+      let contentY = null
+      let aMx = mx
+      let aMy = my
+      if (opts.preserveScroll && anchor) {
+        contentX = anchor.contentX * scaleFactor
+        contentY = anchor.contentY * scaleFactor
+        aMx = anchor.mx
+        aMy = anchor.my
+      } else if (opts.preserveScroll) {
+        contentX = centerContentX * scaleFactor
+        contentY = centerContentY * scaleFactor
+      }
+      viewer.replaceChildren(built.sizer)
+      sizer = built.sizer
+      pages = built.wrap
+      renderedZoom = zoom
+      previewZoom = zoom
+      storeZoom = zoom
+      scrollAnchor = null
+      applyPreviewChrome(zoom, zoom)
+      if (contentX != null && contentY != null) {
+        setScrollStable(centerPad + contentX - aMx, contentY - aMy)
+      }
+      zoomLabel.textContent = `${Math.round(zoom * 100)}%`
+    }
+    function openAt(zoom) {
+      const built = buildPages(zoom)
+      viewer.replaceChildren(built.sizer)
+      sizer = built.sizer
+      pages = built.wrap
+      renderedZoom = zoom
+      previewZoom = zoom
+      storeZoom = zoom
+      applyPreviewChrome(zoom, zoom)
+      viewer.scrollLeft = 0
+      viewer.scrollTop = 0
+      zoomLabel.textContent = `${Math.round(zoom * 100)}%`
+    }
+    function fitZoom(mode) {
+      const pageEl = document.getElementById('pdf-page-doc-0')
+      const zNow = Math.max(storeZoom, 1e-6)
+      const pageW1 = pageEl.offsetWidth / zNow
+      const pageH1 = pageEl.offsetHeight / zNow
+      const availW = viewer.clientWidth
+      const availH = viewer.clientHeight
+      const zW = availW / (pageW1 + 2 * PAD_X)
+      const zH = availH / (pageH1 + PAD_TOP + PAD_BOTTOM)
+      const next = clampZoom(mode === 'width' ? zW : Math.min(zW, zH))
+      // toolbar path: store update → settle preserveScroll (viewport center)
+      settleTo(Number(next.toFixed(2)), { preserveScroll: true })
+    }
+    function onWheel(e) {
+      if (!(e.ctrlKey || e.metaKey)) return
+      e.preventDefault()
+      const rect = viewer.getBoundingClientRect()
+      const mx = e.clientX - rect.left
+      const my = e.clientY - rect.top
+      const rendered = renderedZoom
+      const prevPreview = previewZoom
+      const delta = -e.deltaY
+      const step = delta * 0.0015
+      const next = clampZoom(prevPreview + (step || (delta > 0 ? 0.04 : -0.04)))
+      if (next === prevPreview) return
+      const prevRatio = prevPreview / rendered
+      const prevPad = centerPad
+      scrollAnchor = {
+        contentX: (viewer.scrollLeft + mx - prevPad) / prevRatio,
+        contentY: (viewer.scrollTop + my) / prevRatio,
+        mx, my
+      }
+      previewZoom = next
+      applyPreviewChrome(rendered, next)
+      zoomScrollToAnchor(rendered, next)
+      if (settleTimer != null) clearTimeout(settleTimer)
+      settleTimer = setTimeout(() => {
+        settleTimer = null
+        const z = previewZoom
+        if (Math.abs(z - storeZoom) < 0.001) return
+        settleTo(z, { preserveScroll: true })
+      }, 140)
+    }
+    viewer.addEventListener('wheel', onWheel, { passive: false })
+    document.getElementById('btn-fit-width').onclick = () => fitZoom('width')
+    document.getElementById('btn-fit-page').onclick = () => fitZoom('page')
+
+    function pageCenterVsViewer() {
+      const pageEl = document.getElementById('pdf-page-doc-0')
+      const vr = viewer.getBoundingClientRect()
+      const pr = pageEl.getBoundingClientRect()
+      const viewerCx = vr.left + viewer.clientWidth / 2
+      const pageCx = pr.left + pr.width / 2
+      return { dx: pageCx - viewerCx, pageW: pr.width, pageH: pr.height, viewerW: viewer.clientWidth, viewerH: viewer.clientHeight }
+    }
+    function contentPointUnder(clientX, clientY) {
+      const rect = viewer.getBoundingClientRect()
+      const mx = clientX - rect.left
+      const my = clientY - rect.top
+      const ratio = previewZoom / renderedZoom
+      const contentX = (viewer.scrollLeft + mx - centerPad) / ratio
+      const contentY = (viewer.scrollTop + my) / ratio
+      return { contentX, contentY, mx, my, ratio, pad: centerPad }
+    }
+
+    window.__harness = {
+      openAt,
+      fitZoom,
+      settleTo,
+      pageCenterVsViewer,
+      contentPointUnder,
+      getState: () => ({ renderedZoom, previewZoom, storeZoom, centerPad, scrollLeft: viewer.scrollLeft, scrollTop: viewer.scrollTop }),
+      applyPreviewChrome: () => applyPreviewChrome(renderedZoom, previewZoom),
+      viewer,
+      constants: { PAGE_W1, PAGE_H1, PAD_X, PAD_TOP, PAD_BOTTOM, CSS_BASE },
+      async wheelZoomAt(clientX, clientY, deltaY) {
+        const ev = new WheelEvent('wheel', {
+          bubbles: true, cancelable: true, ctrlKey: true,
+          clientX, clientY, deltaY, deltaMode: 0
+        })
+        viewer.dispatchEvent(ev)
+      },
+      waitSettle(ms = 220) {
+        return new Promise((r) => setTimeout(r, ms))
+      },
+      log(msg) {
+        logEl.textContent += msg + '\n'
+      }
+    }
+    openAt(1)
+    window.__ready = true
+  </script>
+</body>
+</html>

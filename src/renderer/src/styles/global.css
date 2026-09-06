@@ -912,7 +912,8 @@ input[type="text"]:focus, .modal-card input:focus {
 
 
 /* ===== Zoom sizer (CSS transform preview during Ctrl+wheel) ===== */
-/* Stable top-left origin: no margin:auto (it recenters as width changes under scale). */
+/* Stable top-left origin: no margin:auto (it recenters as width changes under scale).
+   Horizontal centering uses pages.left + sizer width (updated in PdfViewer). */
 .pdf-zoom-sizer {
   position: relative;
   margin: 0;
@@ -920,9 +921,9 @@ input[type="text"]:focus, .modal-card input:focus {
 /* Absolute so untransformed layout size does not inflate scrollWidth during scale(). */
 .pdf-zoom-sizer .pdf-pages {
   position: absolute;
-  left: 0;
+  left: 0; /* overridden inline for center pad */
   top: 0;
-  align-items: flex-start;
+  align-items: center; /* center narrower pages within the column */
   transform-origin: 0 0;
   will-change: transform;
 }

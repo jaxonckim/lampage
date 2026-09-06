@@ -1,9 +1,11 @@
 import {
+  ArrowLeftRight,
   ChevronLeft,
   ChevronRight,
   FilePenLine,
   FileUp,
   Layers,
+  Maximize2,
   PanelLeftClose,
   PanelLeftOpen,
   PanelRightClose,
@@ -96,6 +98,33 @@ export function FunctionBar({
     updateDoc(doc.id, { zoom: Math.min(3, Math.max(0.4, Number(z.toFixed(2)))) })
   }
 
+  /** Match PdfViewer chrome so fit zoom accounts for scaled padding. */
+  const FIT_PAD_X = 16
+  const FIT_PAD_TOP = 24
+  const FIT_PAD_BOTTOM = 48
+
+  const fitZoom = (mode: 'width' | 'page'): void => {
+    if (!doc || doc.kind !== 'pdf') return
+    const viewer = document.querySelector('.pdf-viewer') as HTMLElement | null
+    const pageEl =
+      document.getElementById(`pdf-page-${doc.id}-${doc.currentPage}`) ??
+      (viewer?.querySelector('.pdf-page-wrap') as HTMLElement | null)
+    if (!viewer || !pageEl) return
+    const zNow = Math.max(doc.zoom, 1e-6)
+    // Page wrap width/height are at current zoom; normalize to zoom=1.
+    const pageW1 = pageEl.offsetWidth / zNow
+    const pageH1 = pageEl.offsetHeight / zNow
+    if (pageW1 <= 0 || pageH1 <= 0) return
+    const availW = viewer.clientWidth
+    const availH = viewer.clientHeight
+    if (availW <= 0 || availH <= 0) return
+    // Content size at zoom z ≈ (page + chrome) * z  (center pad is 0 when fitting).
+    const zW = availW / (pageW1 + 2 * FIT_PAD_X)
+    const zH = availH / (pageH1 + FIT_PAD_TOP + FIT_PAD_BOTTOM)
+    const next = mode === 'width' ? zW : Math.min(zW, zH)
+    setZoom(next)
+  }
+
   const pageCount = doc?.kind === 'pdf' ? doc.pageCount ?? 0 : 0
   const pageLabel =
     doc?.kind === 'pdf'
@@ -170,6 +199,26 @@ export function FunctionBar({
         aria-label="放大"
       >
         <ZoomIn size={16} strokeWidth={1.75} />
+      </button>
+      <button
+        type="button"
+        className="icon-btn"
+        disabled={!doc || doc.kind !== 'pdf'}
+        onClick={() => fitZoom('width')}
+        title="适应宽度"
+        aria-label="适应宽度"
+      >
+        <ArrowLeftRight size={16} strokeWidth={1.75} />
+      </button>
+      <button
+        type="button"
+        className="icon-btn"
+        disabled={!doc || doc.kind !== 'pdf'}
+        onClick={() => fitZoom('page')}
+        title="适应页面"
+        aria-label="适应页面"
+      >
+        <Maximize2 size={16} strokeWidth={1.75} />
       </button>
 
       <span className="toolbar-sep" />
