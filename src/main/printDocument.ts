@@ -11,7 +11,7 @@
  * a ghost taskbar entry and the print dialog never surfaces properly.
  * MD/HTML conversion windows stay hidden; only the PDF print window is shown.
  */
-import { BrowserWindow, app } from 'electron'
+import { BrowserWindow, app, screen } from 'electron'
 import { join } from 'path'
 import { pathToFileURL } from 'url'
 import { writeFile, unlink } from 'fs/promises'
@@ -53,12 +53,36 @@ function findPrintParent(): BrowserWindow | undefined {
   return BrowserWindow.getAllWindows().find((w) => !w.isDestroyed())
 }
 
+function getPrintWorkArea(parent?: BrowserWindow): Electron.Rectangle {
+  try {
+    if (parent && !parent.isDestroyed()) {
+      const bounds = parent.getBounds()
+      const display = screen.getDisplayMatching(bounds)
+      if (display?.workArea) return display.workArea
+    }
+  } catch {
+    /* fall through to primary */
+  }
+  return screen.getPrimaryDisplay().workArea
+}
+
 function createPrintWindow(): BrowserWindow {
   const parent = findPrintParent()
+  const workArea = getPrintWorkArea(parent)
+  const margin = 48
+  const width = Math.min(900, Math.max(320, workArea.width - margin))
+  const height = Math.min(
+    Math.min(900, Math.round(workArea.height * 0.8)),
+    Math.max(320, workArea.height - margin)
+  )
+  const x = Math.round(workArea.x + (workArea.width - width) / 2)
+  const y = Math.round(workArea.y + (workArea.height - height) / 2)
   return new BrowserWindow({
     show: false,
-    width: 900,
-    height: 1200,
+    width,
+    height,
+    x,
+    y,
     title: '打印',
     // Parent helps Windows own the system print dialog without modal=true
     // (modal would block the parent and can interfere with multi-page PDF print).
