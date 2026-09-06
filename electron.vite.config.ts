@@ -1,5 +1,6 @@
 import { resolve } from 'path'
 import { defineConfig, externalizeDepsPlugin } from 'electron-vite'
+import type { Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 
 const DEV_CSP =
@@ -7,7 +8,24 @@ const DEV_CSP =
 const PROD_CSP =
   "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; worker-src 'self' blob:; connect-src 'self' blob:;"
 
-export default defineConfig(({ command }) => ({
+function lampageCsp(): Plugin {
+  return {
+    name: 'lampage-csp',
+    transformIndexHtml: {
+      order: 'pre',
+      handler(html, ctx) {
+        const isBuild = Boolean(ctx.bundle) || process.env.NODE_ENV === 'production'
+        if (!isBuild) return html
+        return html.replace(
+          /http-equiv="Content-Security-Policy" content="[^"]*"/,
+          `http-equiv="Content-Security-Policy" content="${PROD_CSP}"`
+        )
+      }
+    }
+  }
+}
+
+export default defineConfig({
   main: {
     plugins: [externalizeDepsPlugin()],
     build: {
@@ -29,25 +47,18 @@ export default defineConfig(({ command }) => ({
     }
   },
   renderer: {
-    // `server` applies only to vite dev / preview — never to packaged Electron builds.
-    // allowedHosts: true keeps Cloudflare quick tunnels working in dev.
-    server: command === 'serve' ? { allowedHosts: true } : undefined,
+    // Cloudflare quick tunnels in preview/dev
+    server: {
+      allowedHosts: true,
+      host: '127.0.0.1'
+    },
     resolve: {
       alias: {
-        '@renderer': resolve('src/renderer/src'),
-        '@shared': resolve('src/shared')
+        '@renderer': resolve(__dirname, 'src/renderer/src'),
+        '@shared': resolve(__dirname, 'src/shared')
       }
     },
-    plugins: [
-      react(),
-      {
-        name: 'lampage-csp',
-        transformIndexHtml(html) {
-          const csp = command === 'serve' ? DEV_CSP : PROD_CSP
-          return html.replace(/__LAMPAGE_CSP__/g, csp)
-        }
-      }
-    ],
+    plugins: [react(), lampageCsp()],
     build: {
       rollupOptions: {
         input: {
@@ -59,4 +70,4 @@ export default defineConfig(({ command }) => ({
       include: ['pdfjs-dist']
     }
   }
-}))
+})
