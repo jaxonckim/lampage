@@ -199,7 +199,10 @@ export default function App(): JSX.Element {
       const paths: string[] = []
       const browserFiles: { path: string; name: string; data: ArrayBuffer }[] = []
       for (const f of Array.from(files)) {
-        const pth = (f as File & { path?: string }).path
+        const pth =
+          typeof window.api.getPathForFile === 'function'
+            ? window.api.getPathForFile(f)
+            : (f as File & { path?: string }).path
         if (pth) paths.push(pth)
         else if (/\.(pdf|md|markdown)$/i.test(f.name)) {
           browserFiles.push({ path: f.name, name: f.name, data: await f.arrayBuffer() })

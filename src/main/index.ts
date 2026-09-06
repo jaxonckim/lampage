@@ -1,5 +1,5 @@
 import { app, BrowserWindow, shell, ipcMain, dialog, Menu } from 'electron'
-import { join } from 'path'
+import { join, resolve, basename, dirname, isAbsolute, sep } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { readFile, writeFile, mkdir, readdir, unlink } from 'fs/promises'
 import { existsSync } from 'fs'
@@ -18,6 +18,9 @@ import {
 
 let mainWindow: BrowserWindow | null = null
 
+/** Absolute paths the renderer may read/write after explicit user gestures (open/save/drop). */
+const allowedPaths = new Set<string>()
+
 function signaturesDir(): string {
   return join(app.getPath('userData'), 'signatures')
 }
@@ -26,6 +29,67 @@ async function ensureSignaturesDir(): Promise<string> {
   const dir = signaturesDir()
   if (!existsSync(dir)) await mkdir(dir, { recursive: true })
   return dir
+}
+
+function assertSafeAbsolutePath(filePath: unknown): string {
+  if (typeof filePath !== 'string' || !filePath.trim()) {
+    throw new Error('Invalid path')
+  }
+  if (filePath.includes('\0')) {
+    throw new Error('Invalid path')
+  }
+  const resolved = resolve(filePath)
+  if (!isAbsolute(resolved)) {
+    throw new Error('Path must be absolute')
+  }
+  return resolved
+}
+
+function allowPath(filePath: string): string {
+  const resolved = assertSafeAbsolutePath(filePath)
+  allowedPaths.add(resolved)
+  return resolved
+}
+
+function requireAllowedPath(filePath: unknown): string {
+  const resolved = assertSafeAbsolutePath(filePath)
+  if (!allowedPaths.has(resolved)) {
+    throw new Error('Path not permitted')
+  }
+  return resolved
+}
+
+/** Ensure a signature id resolves to a file directly under the signatures directory. */
+function resolveSignatureTarget(dir: string, id: unknown): string {
+  if (typeof id !== 'string' || !id || id.includes('\0')) {
+    throw new Error('Invalid signature id')
+  }
+  // Reject any path separators / relative segments before basename.
+  if (/[/\\]/.test(id) || id === '.' || id === '..') {
+    throw new Error('Invalid signature id')
+  }
+  const safeName = basename(id)
+  if (!safeName || safeName !== id) {
+    throw new Error('Invalid signature id')
+  }
+  if (!/\.(png|jpg|jpeg)$/i.test(safeName)) {
+    throw new Error('Invalid signature id')
+  }
+  const target = resolve(dir, safeName)
+  const root = resolve(dir)
+  if (target !== root && !target.startsWith(root + sep)) {
+    throw new Error('Invalid signature path')
+  }
+  return target
+}
+
+function isSafeExternalUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url)
+    return parsed.protocol === 'https:' || parsed.protocol === 'http:'
+  } catch {
+    return false
+  }
 }
 
 function createWindow(): void {
@@ -38,7 +102,7 @@ function createWindow(): void {
     title: 'Lampage',
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
-      sandbox: false,
+      sandbox: true,
       contextIsolation: true,
       nodeIntegration: false,
       webSecurity: true
@@ -50,7 +114,9 @@ function createWindow(): void {
   })
 
   mainWindow.webContents.setWindowOpenHandler((details) => {
-    shell.openExternal(details.url)
+    if (isSafeExternalUrl(details.url)) {
+      void shell.openExternal(details.url)
+    }
     return { action: 'deny' }
   })
 
@@ -149,10 +215,11 @@ function registerIpc(): void {
     if (result.canceled) return []
     const files = []
     for (const filePath of result.filePaths) {
-      const buf = await readFile(filePath)
+      const allowed = allowPath(filePath)
+      const buf = await readFile(allowed)
       files.push({
-        path: filePath,
-        name: filePath.split(/[/\\]/).pop() || filePath,
+        path: allowed,
+        name: basename(allowed),
         data: buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength)
       })
     }
@@ -165,46 +232,65 @@ function registerIpc(): void {
       filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp'] }]
     })
     if (result.canceled || !result.filePaths[0]) return null
-    const filePath = result.filePaths[0]
-    const buf = await readFile(filePath)
+    const allowed = allowPath(result.filePaths[0])
+    const buf = await readFile(allowed)
     return {
-      path: filePath,
-      name: filePath.split(/[/\\]/).pop() || filePath,
+      path: allowed,
+      name: basename(allowed),
       data: buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength),
-      mime: filePath.toLowerCase().endsWith('.png') ? 'png' : 'jpg'
+      mime: allowed.toLowerCase().endsWith('.png') ? 'png' : 'jpg'
     }
   })
 
-  ipcMain.handle('dialog:saveFile', async (_e, opts: { defaultPath?: string; filters?: Electron.FileFilter[] }) => {
-    const result = await dialog.showSaveDialog(mainWindow!, {
-      defaultPath: opts?.defaultPath,
-      filters: opts?.filters || [{ name: 'All', extensions: ['*'] }]
-    })
-    if (result.canceled || !result.filePath) return null
-    return result.filePath
-  })
+  ipcMain.handle(
+    'dialog:saveFile',
+    async (_e, opts: { defaultPath?: string; filters?: Electron.FileFilter[] }) => {
+      const result = await dialog.showSaveDialog(mainWindow!, {
+        defaultPath: typeof opts?.defaultPath === 'string' ? opts.defaultPath : undefined,
+        filters: opts?.filters || [{ name: 'All', extensions: ['*'] }]
+      })
+      if (result.canceled || !result.filePath) return null
+      return allowPath(result.filePath)
+    }
+  )
 
   ipcMain.handle('fs:readFile', async (_e, filePath: string) => {
-    const buf = await readFile(filePath)
+    const allowed = requireAllowedPath(filePath)
+    const buf = await readFile(allowed)
     return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength)
   })
 
-  ipcMain.handle('fs:writeFile', async (_e, filePath: string, data: ArrayBuffer | Uint8Array | string) => {
-    if (typeof data === 'string') {
-      await writeFile(filePath, data, 'utf8')
-    } else {
-      await writeFile(filePath, toBuffer(data as Uint8Array))
+  ipcMain.handle(
+    'fs:writeFile',
+    async (_e, filePath: string, data: ArrayBuffer | Uint8Array | string) => {
+      const allowed = requireAllowedPath(filePath)
+      // Ensure parent dir exists only for already-allowed paths (save-as creates new files).
+      const parent = dirname(allowed)
+      if (!existsSync(parent)) {
+        throw new Error('Parent directory does not exist')
+      }
+      if (typeof data === 'string') {
+        await writeFile(allowed, data, 'utf8')
+      } else {
+        await writeFile(allowed, toBuffer(data as Uint8Array))
+      }
+      return true
     }
-    return true
-  })
+  )
 
-  ipcMain.handle('fs:readDropped', async (_e, filePaths: string[]) => {
+  ipcMain.handle('fs:readDropped', async (_e, filePaths: unknown) => {
+    if (!Array.isArray(filePaths)) throw new Error('Invalid paths')
     const files = []
     for (const filePath of filePaths) {
-      const buf = await readFile(filePath)
+      // User explicitly dropped these files — allow after absolute-path checks.
+      const allowed = allowPath(filePath as string)
+      if (!/\.(pdf|md|markdown|txt)$/i.test(allowed)) {
+        throw new Error('Unsupported dropped file type')
+      }
+      const buf = await readFile(allowed)
       files.push({
-        path: filePath,
-        name: filePath.split(/[/\\]/).pop() || filePath,
+        path: allowed,
+        name: basename(allowed),
         data: buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength)
       })
     }
@@ -213,9 +299,9 @@ function registerIpc(): void {
 
   ipcMain.handle('print:current', async () => {
     if (!mainWindow) return false
-    return new Promise<boolean>((resolve) => {
+    return new Promise<boolean>((resolvePromise) => {
       mainWindow!.webContents.print({ silent: false, printBackground: true }, (success) => {
-        resolve(success)
+        resolvePromise(success)
       })
     })
   })
@@ -237,10 +323,13 @@ function registerIpc(): void {
     const out = await extractPages(new Uint8Array(data), indexes)
     return out.buffer.slice(out.byteOffset, out.byteOffset + out.byteLength)
   })
-  ipcMain.handle('pdf:splitRanges', async (_e, data: ArrayBuffer, ranges: Array<{ start: number; end: number }>) => {
-    const outs = await splitByRanges(new Uint8Array(data), ranges)
-    return outs.map((o) => o.buffer.slice(o.byteOffset, o.byteOffset + o.byteLength))
-  })
+  ipcMain.handle(
+    'pdf:splitRanges',
+    async (_e, data: ArrayBuffer, ranges: Array<{ start: number; end: number }>) => {
+      const outs = await splitByRanges(new Uint8Array(data), ranges)
+      return outs.map((o) => o.buffer.slice(o.byteOffset, o.byteOffset + o.byteLength))
+    }
+  )
   ipcMain.handle('pdf:splitEveryN', async (_e, data: ArrayBuffer, n: number) => {
     const outs = await splitEveryN(new Uint8Array(data), n)
     return outs.map((o) => o.buffer.slice(o.byteOffset, o.byteOffset + o.byteLength))
@@ -249,10 +338,13 @@ function registerIpc(): void {
     const out = await mergePdfs(list.map((d) => new Uint8Array(d)))
     return out.buffer.slice(out.byteOffset, out.byteOffset + out.byteLength)
   })
-  ipcMain.handle('pdf:rotate', async (_e, data: ArrayBuffer, indexes: number[], angle: 90 | 180 | 270) => {
-    const out = await rotatePages(new Uint8Array(data), indexes, angle)
-    return out.buffer.slice(out.byteOffset, out.byteOffset + out.byteLength)
-  })
+  ipcMain.handle(
+    'pdf:rotate',
+    async (_e, data: ArrayBuffer, indexes: number[], angle: 90 | 180 | 270) => {
+      const out = await rotatePages(new Uint8Array(data), indexes, angle)
+      return out.buffer.slice(out.byteOffset, out.byteOffset + out.byteLength)
+    }
+  )
   ipcMain.handle('pdf:duplicate', async (_e, data: ArrayBuffer, pageIndex: number) => {
     const out = await duplicatePage(new Uint8Array(data), pageIndex)
     return out.buffer.slice(out.byteOffset, out.byteOffset + out.byteLength)
@@ -299,18 +391,22 @@ function registerIpc(): void {
   ipcMain.handle(
     'signatures:save',
     async (_e, payload: { name: string; data: ArrayBuffer; mime: 'png' | 'jpg' }) => {
+      if (!payload || typeof payload !== 'object') throw new Error('Invalid payload')
+      if (payload.mime !== 'png' && payload.mime !== 'jpg') throw new Error('Invalid mime')
       const dir = await ensureSignaturesDir()
-      const safe = payload.name.replace(/[^\w.\-]/gi, '_') || `sig-${Date.now()}`
+      const rawName = typeof payload.name === 'string' ? payload.name : ''
+      const safe = basename(rawName).replace(/[^\w.\-]/gi, '_') || `sig-${Date.now()}`
       const ext = payload.mime === 'png' ? 'png' : 'jpg'
-      const fileName = safe.endsWith(`.${ext}`) ? safe : `${safe}.${ext}`
-      await writeFile(join(dir, fileName), toBuffer(new Uint8Array(payload.data)))
-      return fileName
+      const fileName = safe.toLowerCase().endsWith(`.${ext}`) ? safe : `${safe}.${ext}`
+      const target = resolveSignatureTarget(dir, fileName)
+      await writeFile(target, toBuffer(new Uint8Array(payload.data)))
+      return basename(target)
     }
   )
 
   ipcMain.handle('signatures:delete', async (_e, id: string) => {
     const dir = await ensureSignaturesDir()
-    const target = join(dir, id)
+    const target = resolveSignatureTarget(dir, id)
     if (existsSync(target)) await unlink(target)
     return true
   })

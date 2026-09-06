@@ -49,7 +49,8 @@ function markdownToHtml(md: string): string {
         codeBuf = []
       } else {
         const code = codeBuf.join('\n').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-        html.push(`<pre data-language="${codeLang}"><code>${code}</code></pre>`)
+        const lang = codeLang.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;")
+        html.push(`<pre data-language="${lang}"><code>${code}</code></pre>`)
         inCode = false
       }
       continue
@@ -91,6 +92,24 @@ function markdownToHtml(md: string): string {
   return html.join('\n')
 }
 
+function safeHref(href: string): string {
+  const t = href.trim()
+  if (!t) return '#'
+  const lower = t.toLowerCase()
+  if (
+    lower.startsWith('https:') ||
+    lower.startsWith('http:') ||
+    lower.startsWith('mailto:') ||
+    t.startsWith('#') ||
+    t.startsWith('/') ||
+    t.startsWith('./') ||
+    t.startsWith('../')
+  ) {
+    return t.replace(/"/g, '&quot;')
+  }
+  return '#'
+}
+
 function inline(text: string): string {
   return text
     .replace(/&/g, '&amp;')
@@ -99,7 +118,9 @@ function inline(text: string): string {
     .replace(/`([^`]+)`/g, '<code>$1</code>')
     .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
     .replace(/\*([^*]+)\*/g, '<em>$1</em>')
-    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>')
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_m, label: string, href: string) => {
+      return `<a href="${safeHref(href)}">${label}</a>`
+    })
 }
 
 function htmlToMarkdown(root: HTMLElement): string {
@@ -244,7 +265,11 @@ export default function MarkdownView({
     {
       extensions: [
         StarterKit,
-        Link.configure({ openOnClick: false }),
+        Link.configure({
+          openOnClick: false,
+          protocols: ["http", "https", "mailto"],
+          HTMLAttributes: { rel: "noopener noreferrer", target: "_blank" }
+        }),
         Placeholder.configure({ placeholder: '开始书写 Markdown...' }),
         Typography
       ],

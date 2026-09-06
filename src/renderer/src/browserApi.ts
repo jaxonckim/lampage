@@ -233,6 +233,7 @@ export function installBrowserApi(): void {
       }
       return true
     },
+    getPathForFile: () => '',
     readDropped: async () => {
       // Electron-only path list; browser drop handled in App with File objects.
       return []

@@ -1,18 +1,6 @@
 import { FileText, X } from 'lucide-react'
 import { useAppStore } from '../stores/appStore'
 
-async function openWelcomeSample(): Promise<void> {
-  try {
-    const res = await fetch('/samples/welcome.md')
-    if (!res.ok) throw new Error(String(res.status))
-    const text = await res.text()
-    const data = new TextEncoder().encode(text).buffer
-    useAppStore.getState().addOpenedFiles([{ path: 'welcome.md', name: 'welcome.md', data }])
-  } catch {
-    useAppStore.getState().setStatus('请通过「打开」加载 samples/welcome.md')
-  }
-}
-
 export default function LeftSidebar(): JSX.Element {
   const docs = useAppStore((s) => s.docs)
   const activeId = useAppStore((s) => s.activeId)
@@ -56,18 +44,6 @@ export default function LeftSidebar(): JSX.Element {
             </button>
           </li>
         ))}
-      </ul>
-      <div className="sidebar-section-label">示例</div>
-      <ul className="file-list" style={{ flex: '0 0 auto', paddingTop: 0 }}>
-        <li
-          className="file-item"
-          title="打开示例 welcome.md"
-          onClick={() => void openWelcomeSample()}
-        >
-          <FileText className="file-icon" size={15} strokeWidth={1.6} />
-          <span className="name">welcome.md</span>
-          <span className="badge md">MD</span>
-        </li>
       </ul>
     </aside>
   )

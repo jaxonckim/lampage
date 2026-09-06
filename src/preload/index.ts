@@ -1,10 +1,18 @@
-import { contextBridge, ipcRenderer } from 'electron'
+import { contextBridge, ipcRenderer, webUtils } from 'electron'
 
 export type OpenedFile = {
   path: string
   name: string
   data: ArrayBuffer
 }
+
+const MENU_CHANNELS = new Set([
+  'menu:open',
+  'menu:save',
+  'menu:save-as',
+  'menu:print',
+  'menu:find'
+])
 
 const api = {
   openFiles: (): Promise<OpenedFile[]> => ipcRenderer.invoke('dialog:openFiles'),
@@ -19,6 +27,14 @@ const api = {
     ipcRenderer.invoke('fs:writeFile', path, data),
   readDropped: (paths: string[]): Promise<OpenedFile[]> =>
     ipcRenderer.invoke('fs:readDropped', paths),
+  /** Resolve a dropped File to an absolute path (Electron; empty string if unavailable). */
+  getPathForFile: (file: File): string => {
+    try {
+      return webUtils.getPathForFile(file) || ''
+    } catch {
+      return ''
+    }
+  },
   print: (): Promise<boolean> => ipcRenderer.invoke('print:current'),
 
   pdf: {
@@ -68,6 +84,9 @@ const api = {
   },
 
   onMenu: (channel: string, cb: () => void) => {
+    if (!MENU_CHANNELS.has(channel)) {
+      return () => undefined
+    }
     const handler = (): void => cb()
     ipcRenderer.on(channel, handler)
     return () => ipcRenderer.removeListener(channel, handler)

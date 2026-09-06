@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { OpenDoc } from '../types/docs'
 import { useAppStore } from '../stores/appStore'
 import SignaturePad from './SignaturePad'
@@ -9,21 +9,38 @@ interface Props {
   onPdfMutated: (data: ArrayBuffer) => void
 }
 
+type SigItem = { id: string; name: string; mime: 'png' | 'jpg'; data: ArrayBuffer; url: string }
+
 export default function SignatureModal({ doc, onPdfMutated }: Props): JSX.Element {
   const open = useAppStore((s) => s.signatureOpen)
   const setOpen = useAppStore((s) => s.setSignatureOpen)
   const setStatus = useAppStore((s) => s.setStatus)
-  const [sigs, setSigs] = useState<
-    Array<{ id: string; name: string; mime: 'png' | 'jpg'; data: ArrayBuffer }>
-  >([])
+  const [sigs, setSigs] = useState<SigItem[]>([])
+  const urlsRef = useRef<string[]>([])
+
+  const revokeAll = (): void => {
+    for (const u of urlsRef.current) URL.revokeObjectURL(u)
+    urlsRef.current = []
+  }
 
   const refreshSigs = async (): Promise<void> => {
-    setSigs(await window.api.signatures.list())
+    const list = await window.api.signatures.list()
+    revokeAll()
+    const next = list.map((s) => {
+      const url = URL.createObjectURL(new Blob([s.data], { type: `image/${s.mime}` }))
+      urlsRef.current.push(url)
+      return { ...s, url }
+    })
+    setSigs(next)
   }
 
   useEffect(() => {
-    if (open) refreshSigs()
+    if (open) void refreshSigs()
   }, [open])
+
+  useEffect(() => {
+    return () => revokeAll()
+  }, [])
 
   const disabled = !doc || doc.kind !== 'pdf'
 
@@ -47,7 +64,7 @@ export default function SignatureModal({ doc, onPdfMutated }: Props): JSX.Elemen
               data: img.data,
               mime: img.mime
             })
-            refreshSigs()
+            void refreshSigs()
           }}
         >
           导入图片签名
@@ -57,34 +74,30 @@ export default function SignatureModal({ doc, onPdfMutated }: Props): JSX.Elemen
         {sigs.length === 0 && (
           <div style={{ fontSize: 12, color: 'var(--muted)' }}>暂无已保存签名</div>
         )}
-        {sigs.map((s) => {
-          const url = URL.createObjectURL(new Blob([s.data], { type: `image/${s.mime}` }))
-          return (
-            <img
-              key={s.id}
-              src={url}
-              alt={s.name}
-              title={`点击放置: ${s.name}`}
-              onClick={async () => {
-                if (!doc || doc.kind !== 'pdf') {
-                  setStatus('请先打开 PDF')
-                  return
-                }
-                const page = doc.currentPage
-                const data = await window.api.pdf.embedSignature(
-                  doc.data,
-                  page,
-                  s.data,
-                  s.mime,
-                  { x: 360, y: 72, width: 160, height: 60 }
-                )
-                onPdfMutated(data)
-                setStatus(`已在第 ${page + 1} 页放置签名`)
-                setOpen(false)
-              }}
-            />
-          )
-        })}
+        {sigs.map((s) => (
+          <img
+            key={s.id}
+            src={s.url}
+            alt={s.name}
+            title={`点击放置: ${s.name}`}
+            onClick={async () => {
+              if (!doc || doc.kind !== 'pdf') {
+                setStatus('请先打开 PDF')
+                return
+              }
+              const page = doc.currentPage
+              const data = await window.api.pdf.embedSignature(doc.data, page, s.data, s.mime, {
+                x: 360,
+                y: 72,
+                width: 160,
+                height: 60
+              })
+              onPdfMutated(data)
+              setStatus(`已在第 ${page + 1} 页放置签名`)
+              setOpen(false)
+            }}
+          />
+        ))}
       </div>
     </Modal>
   )
