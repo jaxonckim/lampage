@@ -414,7 +414,7 @@ function registerIpc(): void {
     return files
   })
 
-  // Full-document print (hidden window) — never screenshot the main app chrome.
+  // Full-document print (dedicated window) — never screenshot the main app chrome.
   ipcMain.handle('print:document', async (_e, payload: unknown) => {
     if (!payload || typeof payload !== 'object') throw new Error('Invalid print payload')
     const p = payload as Record<string, unknown>

@@ -5,8 +5,9 @@
  *      then webContents.print() — Chromium prints every page of the PDF.
  * MD:  write a chrome-free HTML document to temp, print that window.
  *
- * Windows: the system print dialog will not appear (or hangs forever) if the
- * print BrowserWindow stays fully hidden — we show it at opacity 0 first.
+ * Windows: the system print dialog needs a visible, focused BrowserWindow.
+ * Never use opacity 0 / showInactive — that leaves a ghost taskbar entry and
+ * the print dialog never surfaces properly.
  */
 import { BrowserWindow, app } from 'electron'
 import { join } from 'path'
@@ -44,13 +45,23 @@ function tempPath(ext: string): string {
   return join(app.getPath('temp'), name)
 }
 
+function findPrintParent(): BrowserWindow | undefined {
+  const focused = BrowserWindow.getFocusedWindow()
+  if (focused && !focused.isDestroyed()) return focused
+  return BrowserWindow.getAllWindows().find((w) => !w.isDestroyed())
+}
+
 function createPrintWindow(): BrowserWindow {
+  const parent = findPrintParent()
   return new BrowserWindow({
     show: false,
     width: 900,
     height: 1200,
-    // Required so Chromium paints PDF/HTML while the window is still hidden
-    // (Windows print dialog otherwise never appears / hangs).
+    title: '打印',
+    // Parent helps Windows own the system print dialog without modal=true
+    // (modal would block the parent and can interfere with multi-page PDF print).
+    ...(parent ? { parent } : {}),
+    // Paint while initially hidden so PDF/HTML layout can settle before show.
     paintWhenInitiallyHidden: true,
     autoHideMenuBar: true,
     webPreferences: {
@@ -163,21 +174,24 @@ export function buildMdPrintHtml(bodyHtml: string, title: string): string {
 </html>`
 }
 
-/** Make the print window eligible as a dialog owner without flashing chrome. */
+/** Show + focus the print window so the system print dialog can appear. */
 function preparePrintWindowForDialog(win: BrowserWindow): void {
   try {
-    // Opacity 0 + showInactive: Windows needs a shown WebContents for the
-    // system print dialog; a forever-hidden window leaves the renderer stuck
-    // on "正在准备打印".
-    win.setOpacity(0)
-    if (typeof win.showInactive === 'function') {
-      win.showInactive()
-    } else {
-      win.show()
+    // Visible + focused at normal opacity. Opacity 0 / showInactive leaves a
+    // ghost taskbar entry on Windows and the print dialog never surfaces.
+    if (typeof win.setOpacity === 'function') {
+      win.setOpacity(1)
+    }
+    win.setTitle('打印')
+    win.show()
+    win.focus()
+    if (typeof win.moveTop === 'function') {
+      win.moveTop()
     }
   } catch {
     try {
       win.show()
+      win.focus()
     } catch {
       /* ignore */
     }
@@ -198,11 +212,11 @@ async function printTempFile(
   try {
     // loadURL resolves after did-finish-load
     await win.loadURL(pathToFileURL(filePath).href)
-    // PDF viewer / layout settle (hidden paint still runs with paintWhenInitiallyHidden)
+    // PDF viewer / layout settle (paintWhenInitiallyHidden paints before show)
     await new Promise((r) => setTimeout(r, meta.kind === 'pdf' ? 600 : 300))
     preparePrintWindowForDialog(win)
-    // Let the compositor attach before opening the dialog
-    await new Promise((r) => setTimeout(r, 50))
+    // Brief settle after show/focus so the compositor owns a real HWND
+    await new Promise((r) => setTimeout(r, 80))
     return await printWebContents(win)
   } finally {
     if (!win.isDestroyed()) win.destroy()
