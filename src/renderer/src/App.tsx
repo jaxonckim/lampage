@@ -94,15 +94,16 @@ export default function App(): JSX.Element {
     }
     setStatus('正在准备打印…')
     try {
+      let ok = false
       if (doc.kind === 'pdf') {
-        // Electron: native full-PDF print in a hidden window (all pages, no chrome).
+        // Electron: native full-PDF print in a dedicated window (all pages, no chrome).
         // Browser shim: multi-page HTML surfaces / blob PDF (see browserApi).
-        await window.api.print({ kind: 'pdf', data: doc.data })
+        ok = await window.api.print({ kind: 'pdf', data: doc.data })
       } else {
         const html = getActiveMarkdownHtml() || doc.text || ''
-        await window.api.print({ kind: 'md', html, title: doc.name })
+        ok = await window.api.print({ kind: 'md', html, title: doc.name })
       }
-      setStatus('已发送到打印')
+      setStatus(ok ? '已发送到打印' : '已取消打印')
     } catch (err) {
       setStatus(`打印失败: ${err instanceof Error ? err.message : String(err)}`)
     }
@@ -126,6 +127,19 @@ export default function App(): JSX.Element {
     return () => offs.forEach((off) => off())
   }, [openFiles, saveDoc, printDoc, requestFind])
 
+  // File association / second-instance opens from main process
+  useEffect(() => {
+    const off = window.api.onOpenFiles?.((files) => {
+      if (files?.length) addOpenedFiles(files)
+    })
+    void window.api.rendererReady?.().then((files) => {
+      if (files?.length) addOpenedFiles(files)
+    })
+    return () => {
+      off?.()
+    }
+  }, [addOpenedFiles])
+
   // Ctrl/Cmd shortcuts (prevent browser defaults in Electron / web preview)
   // Do not intercept Ctrl/Cmd+C — native copy must work for PDF/MD selection.
   useEffect(() => {
@@ -137,6 +151,18 @@ export default function App(): JSX.Element {
         if (!t?.closest('.modal-backdrop')) {
           e.preventDefault()
           setFindOpen(false)
+          return
+        }
+      }
+      // Alt+E toggles Markdown edit mode (when an MD doc is active)
+      if (e.altKey && !e.ctrlKey && !e.metaKey && !e.isComposing) {
+        if (e.key.toLowerCase() === 'e') {
+          const active = useAppStore.getState().activeDoc()
+          if (active?.kind === 'md') {
+            e.preventDefault()
+            const cur = useAppStore.getState().mdEditMode
+            useAppStore.getState().setMdEditMode(!cur)
+          }
           return
         }
       }

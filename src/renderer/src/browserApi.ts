@@ -192,7 +192,9 @@ export function installBrowserApi(): void {
         return true
       }
     },
-    onMenu: () => (() => undefined) as unknown as () => import('electron').IpcRenderer
+    onOpenFiles: (_cb) => () => undefined,
+    rendererReady: async () => [],
+    onMenu: (_channel, _cb) => () => undefined
   }
 
   window.api = api

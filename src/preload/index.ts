@@ -113,14 +113,30 @@ const api = {
     delete: (id: string) => ipcRenderer.invoke('signatures:delete', id) as Promise<boolean>
   },
 
-  onMenu: (channel: string, cb: () => void) => {
+  onMenu: (channel: string, cb: () => void): (() => void) => {
     if (!MENU_CHANNELS.has(channel)) {
       return () => undefined
     }
     const handler = (): void => cb()
     ipcRenderer.on(channel, handler)
-    return () => ipcRenderer.removeListener(channel, handler)
-  }
+    return () => {
+      ipcRenderer.removeListener(channel, handler)
+    }
+  },
+
+  /** Main-process file association / second-instance open (payload already read). */
+  onOpenFiles: (cb: (files: OpenedFile[]) => void): (() => void) => {
+    const handler = (_event: unknown, files: OpenedFile[]): void => {
+      if (Array.isArray(files) && files.length) cb(files)
+    }
+    ipcRenderer.on('app:open-files', handler)
+    return () => {
+      ipcRenderer.removeListener('app:open-files', handler)
+    }
+  },
+
+  /** Flush argv / open-file paths queued before the renderer subscribed. */
+  rendererReady: (): Promise<OpenedFile[]> => ipcRenderer.invoke('app:renderer-ready')
 }
 
 contextBridge.exposeInMainWorld('api', api)

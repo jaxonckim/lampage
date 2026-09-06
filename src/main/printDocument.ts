@@ -1,9 +1,12 @@
 /**
  * Dedicated full-document print jobs (never the main app chrome window).
  *
- * PDF: write bytes to a temp file, open a hidden BrowserWindow on file://PDF,
+ * PDF: write bytes to a temp file, open a BrowserWindow on file://PDF,
  *      then webContents.print() — Chromium prints every page of the PDF.
  * MD:  write a chrome-free HTML document to temp, print that window.
+ *
+ * Windows: the system print dialog will not appear (or hangs forever) if the
+ * print BrowserWindow stays fully hidden — we show it at opacity 0 first.
  */
 import { BrowserWindow, app } from 'electron'
 import { join } from 'path'
@@ -28,6 +31,7 @@ export let lastPrintJob: {
 } | null = null
 
 const MAX_MD_HTML = 40 * 1024 * 1024
+const PRINT_DIALOG_TIMEOUT_MS = 10 * 60 * 1000
 
 function toBuffer(data: ArrayBuffer | Uint8Array): Buffer {
   if (Buffer.isBuffer(data)) return data
@@ -45,6 +49,10 @@ function createPrintWindow(): BrowserWindow {
     show: false,
     width: 900,
     height: 1200,
+    // Required so Chromium paints PDF/HTML while the window is still hidden
+    // (Windows print dialog otherwise never appears / hangs).
+    paintWhenInitiallyHidden: true,
+    autoHideMenuBar: true,
     webPreferences: {
       sandbox: true,
       contextIsolation: true,
@@ -56,11 +64,23 @@ function createPrintWindow(): BrowserWindow {
 
 function printWebContents(win: BrowserWindow): Promise<boolean> {
   return new Promise((resolve) => {
+    let settled = false
+    const finish = (ok: boolean): void => {
+      if (settled) return
+      settled = true
+      resolve(Boolean(ok))
+    }
+    const timer = setTimeout(() => finish(false), PRINT_DIALOG_TIMEOUT_MS)
     // silent:false shows the system print dialog (user may cancel → false)
-    win.webContents.print(
-      { silent: false, printBackground: true },
-      (success) => resolve(Boolean(success))
-    )
+    try {
+      win.webContents.print({ silent: false, printBackground: true }, (success) => {
+        clearTimeout(timer)
+        finish(Boolean(success))
+      })
+    } catch {
+      clearTimeout(timer)
+      finish(false)
+    }
   })
 }
 
@@ -143,6 +163,27 @@ export function buildMdPrintHtml(bodyHtml: string, title: string): string {
 </html>`
 }
 
+/** Make the print window eligible as a dialog owner without flashing chrome. */
+function preparePrintWindowForDialog(win: BrowserWindow): void {
+  try {
+    // Opacity 0 + showInactive: Windows needs a shown WebContents for the
+    // system print dialog; a forever-hidden window leaves the renderer stuck
+    // on "正在准备打印".
+    win.setOpacity(0)
+    if (typeof win.showInactive === 'function') {
+      win.showInactive()
+    } else {
+      win.show()
+    }
+  } catch {
+    try {
+      win.show()
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
 async function printTempFile(
   filePath: string,
   meta: { kind: 'pdf' | 'md' | 'html'; pageCount: number }
@@ -157,8 +198,11 @@ async function printTempFile(
   try {
     // loadURL resolves after did-finish-load
     await win.loadURL(pathToFileURL(filePath).href)
-    // PDF viewer / layout settle
-    await new Promise((r) => setTimeout(r, 400))
+    // PDF viewer / layout settle (hidden paint still runs with paintWhenInitiallyHidden)
+    await new Promise((r) => setTimeout(r, meta.kind === 'pdf' ? 600 : 300))
+    preparePrintWindowForDialog(win)
+    // Let the compositor attach before opening the dialog
+    await new Promise((r) => setTimeout(r, 50))
     return await printWebContents(win)
   } finally {
     if (!win.isDestroyed()) win.destroy()

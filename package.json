@@ -1,7 +1,7 @@
 {
   "name": "lampage",
   "version": "1.0.0",
-  "description": "Lampage — desktop PDF + Markdown reader (Electron + React + TypeScript)",
+  "description": "Lampage \u2014 desktop PDF + Markdown reader (Electron + React + TypeScript)",
   "main": "./out/main/index.js",
   "author": "Chapthon",
   "license": "MIT",
@@ -80,6 +80,26 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true
-    }
+    },
+    "fileAssociations": [
+      {
+        "ext": "pdf",
+        "name": "PDF Document",
+        "description": "PDF Document",
+        "role": "Viewer"
+      },
+      {
+        "ext": "md",
+        "name": "Markdown Document",
+        "description": "Markdown Document",
+        "role": "Editor"
+      },
+      {
+        "ext": "markdown",
+        "name": "Markdown Document",
+        "description": "Markdown Document",
+        "role": "Editor"
+      }
+    ]
   }
 }

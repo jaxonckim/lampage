@@ -204,6 +204,8 @@ export default function MarkdownView({
 }: Props): JSX.Element {
   const mdEditMode = useAppStore((s) => s.mdEditMode)
   const updateDoc = useAppStore((s) => s.updateDoc)
+  const mdEditModeRef = useRef(mdEditMode)
+  mdEditModeRef.current = mdEditMode
   const shellRef = useRef<HTMLDivElement>(null)
   const matchIndex = useRef(0)
   const matchesRef = useRef<FindMatch[]>([])
@@ -222,8 +224,10 @@ export default function MarkdownView({
     (dom: HTMLElement): void => {
       const headings = Array.from(dom.querySelectorAll('h1,h2,h3,h4,h5,h6'))
       const items: TocItem[] = headings.map((h, i) => {
-        const id = `md-h-${doc.id}-${i}`
-        h.id = id
+        const id = h.id && h.id.startsWith(`md-h-${doc.id}-`) ? h.id : `md-h-${doc.id}-${i}`
+        // Avoid rewriting ids on every keystroke — DOM writes during TipTap
+        // transactions break caret / typing on Windows.
+        if (h.id !== id) h.id = id
         return {
           id,
           level: Number(h.tagName.substring(1)),
@@ -283,17 +287,24 @@ export default function MarkdownView({
       content: initialHtml,
       editable: mdEditMode,
       onUpdate: ({ editor: ed }) => {
+        // Never inject chrome (copy buttons) into a live editable ProseMirror DOM —
+        // foreign nodes during transactions make typing a no-op on Windows Electron.
         refreshToc(ed.view.dom)
-        decorateCodeCopy(ed.view.dom)
+        if (!mdEditModeRef.current) {
+          decorateCodeCopy(ed.view.dom)
+        }
         // TipTap often fires onUpdate during initial setContent / extension transforms.
         // Do not mark dirty (or rewrite text) until hydration completes.
         if (suppressDirtyRef.current) return
+        if (!mdEditModeRef.current) return
         const md = htmlToMarkdown(ed.view.dom)
         updateDoc(doc.id, { text: md, dirty: true })
       },
       onCreate: ({ editor: ed }) => {
         refreshToc(ed.view.dom)
-        decorateCodeCopy(ed.view.dom)
+        if (!mdEditModeRef.current) {
+          decorateCodeCopy(ed.view.dom)
+        }
         // Allow Typography / post-create transforms to settle, then arm dirty tracking
         queueMicrotask(() => {
           requestAnimationFrame(() => {
@@ -308,7 +319,25 @@ export default function MarkdownView({
   useEffect(() => {
     if (!editor) return
     editor.setEditable(mdEditMode)
-  }, [editor, mdEditMode])
+    const dom = editor.view.dom as HTMLElement
+    if (mdEditMode) {
+      // Strip any read-mode chrome that would confuse ProseMirror while editing
+      dom.querySelectorAll('.code-copy-btn').forEach((b) => b.remove())
+      // Ensure contenteditable is actually on (TipTap/PM edge cases on Windows)
+      if (dom.getAttribute('contenteditable') !== 'true') {
+        dom.setAttribute('contenteditable', 'true')
+      }
+      queueMicrotask(() => {
+        try {
+          editor.commands.focus()
+        } catch {
+          /* ignore */
+        }
+      })
+    } else {
+      decorateCodeCopy(dom)
+    }
+  }, [editor, mdEditMode, decorateCodeCopy])
 
   const applyFind = useCallback(() => {
     if (!editor) return

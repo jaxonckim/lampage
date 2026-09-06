@@ -259,10 +259,11 @@ export function FunctionBar({
           <span className="toolbar-sep" />
           <button
             type="button"
-            className={`icon-btn${mdEditMode ? ' active' : ''}`}
+            className={`icon-btn md-edit-btn${mdEditMode ? ' active' : ''}`}
             onClick={() => setMdEditMode(!mdEditMode)}
-            title={mdEditMode ? '阅读模式' : '编辑模式'}
-            aria-label={mdEditMode ? '阅读模式' : '编辑模式'}
+            title={mdEditMode ? '阅读模式 (Alt+E)' : '编辑模式 (Alt+E)'}
+            aria-label={mdEditMode ? '阅读模式 (Alt+E)' : '编辑模式 (Alt+E)'}
+            aria-pressed={mdEditMode}
           >
             <Pencil size={16} strokeWidth={1.75} />
           </button>

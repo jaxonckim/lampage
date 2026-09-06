@@ -108,6 +108,87 @@ function isSafeExternalUrl(url: string): boolean {
   }
 }
 
+const OPEN_FILE_RE = /\.(pdf|md|markdown|txt)$/i
+
+/** Paths queued before the renderer is ready to receive app:open-files. */
+let pendingOpenPaths: string[] = []
+let rendererReady = false
+
+function isAppBinaryPath(p: string): boolean {
+  const base = basename(p).toLowerCase()
+  if (base === 'electron' || base === 'electron.exe') return true
+  if (base === 'lampage' || base === 'lampage.exe') return true
+  try {
+    if (resolve(p) === resolve(process.execPath)) return true
+  } catch {
+    /* ignore */
+  }
+  return false
+}
+
+/** Collect document paths from process argv (Windows file association / CLI). */
+function collectOpenPathsFromArgv(argv: string[]): string[] {
+  const out: string[] = []
+  for (const raw of argv) {
+    if (!raw || typeof raw !== 'string') continue
+    const arg = raw.trim().replace(/^["']|["']$/g, '')
+    if (!arg || arg.startsWith('-')) continue
+    if (arg === '.' || arg === '--') continue
+    if (isAppBinaryPath(arg)) continue
+    // Skip electron-vite / project entry points
+    if (/^(electron-vite|vite)$/i.test(basename(arg))) continue
+    if (!OPEN_FILE_RE.test(arg)) continue
+    try {
+      const resolved = resolve(arg)
+      if (existsSync(resolved)) out.push(resolved)
+    } catch {
+      /* ignore */
+    }
+  }
+  return out
+}
+
+async function readOpenedFiles(paths: string[]): Promise<
+  Array<{ path: string; name: string; data: ArrayBuffer }>
+> {
+  const files: Array<{ path: string; name: string; data: ArrayBuffer }> = []
+  for (const filePath of paths) {
+    try {
+      const allowed = allowPath(filePath)
+      if (!OPEN_FILE_RE.test(allowed)) continue
+      const buf = await readFile(allowed)
+      files.push({
+        path: allowed,
+        name: basename(allowed),
+        data: buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength)
+      })
+    } catch (err) {
+      console.error('Failed to open path', filePath, err)
+    }
+  }
+  return files
+}
+
+async function deliverOpenPaths(paths: string[]): Promise<void> {
+  const unique = [...new Set(paths.map((p) => resolve(p)))]
+  if (!unique.length) return
+  if (!mainWindow || mainWindow.isDestroyed() || !rendererReady) {
+    pendingOpenPaths.push(...unique)
+    return
+  }
+  const files = await readOpenedFiles(unique)
+  if (files.length) {
+    mainWindow.webContents.send('app:open-files', files)
+  }
+}
+
+function focusMainWindow(): void {
+  if (!mainWindow || mainWindow.isDestroyed()) return
+  if (mainWindow.isMinimized()) mainWindow.restore()
+  mainWindow.show()
+  mainWindow.focus()
+}
+
 function createWindow(): void {
   mainWindow = new BrowserWindow({
     width: 1400,
@@ -491,20 +572,51 @@ function registerIpc(): void {
     if (existsSync(target)) await unlink(target)
     return true
   })
+
+  // Renderer signals it subscribed to app:open-files — flush cold-start argv paths.
+  ipcMain.handle('app:renderer-ready', async () => {
+    rendererReady = true
+    const queued = pendingOpenPaths.splice(0, pendingOpenPaths.length)
+    if (!queued.length) return []
+    return readOpenedFiles(queued)
+  })
 }
 
-app.whenReady().then(() => {
-  electronApp.setAppUserModelId('com.lampage.app')
-  app.on('browser-window-created', (_, window) => {
-    optimizer.watchWindowShortcuts(window)
+// Single-instance lock (Windows file association / second launch → focus + open).
+const gotSingleInstanceLock = app.requestSingleInstanceLock()
+if (!gotSingleInstanceLock) {
+  app.quit()
+} else {
+  app.on('second-instance', (_event, argv) => {
+    focusMainWindow()
+    const paths = collectOpenPathsFromArgv(argv)
+    if (paths.length) void deliverOpenPaths(paths)
   })
-  registerIpc()
-  createWindow()
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow()
-  })
-})
 
-app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') app.quit()
-})
+  // macOS: open-file may fire before ready
+  app.on('open-file', (event, filePath) => {
+    event.preventDefault()
+    void deliverOpenPaths([filePath])
+  })
+
+  app.whenReady().then(() => {
+    electronApp.setAppUserModelId('com.lampage.app')
+    app.on('browser-window-created', (_, window) => {
+      optimizer.watchWindowShortcuts(window)
+    })
+    registerIpc()
+    // Cold start: argv may include a document path from the shell / NSIS association.
+    pendingOpenPaths.push(...collectOpenPathsFromArgv(process.argv))
+    createWindow()
+    app.on('activate', () => {
+      if (BrowserWindow.getAllWindows().length === 0) {
+        rendererReady = false
+        createWindow()
+      }
+    })
+  })
+
+  app.on('window-all-closed', () => {
+    if (process.platform !== 'darwin') app.quit()
+  })
+}

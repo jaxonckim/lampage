@@ -130,6 +130,16 @@ button, input, select, textarea { font-family: inherit; }
   background: var(--accent-soft);
   color: var(--accent);
 }
+/* MD edit-mode toggle: solid accent so "on" is unmistakable */
+.icon-btn.md-edit-btn.active {
+  background: var(--accent);
+  color: #fff;
+  box-shadow: 0 0 0 2px var(--accent-ring);
+}
+.icon-btn.md-edit-btn.active:hover:not(:disabled) {
+  background: var(--accent-hover);
+  color: #fff;
+}
 .icon-btn:focus-visible {
   outline: 2px solid var(--accent-ring);
   outline-offset: 1px;
@@ -404,6 +414,8 @@ button, input, select, textarea { font-family: inherit; }
 .status-bar {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
+  text-align: right;
   padding: 0 12px;
   font-size: 11px;
   color: var(--muted);
@@ -652,6 +664,18 @@ button, input, select, textarea { font-family: inherit; }
   user-select: text;
   -webkit-user-select: text;
 }
+.md-shell:not(.read-only) .ProseMirror {
+  caret-color: auto;
+  cursor: text;
+  user-select: text;
+  -webkit-user-select: text;
+}
+.md-shell:not(.read-only) .ProseMirror [contenteditable="true"],
+.md-shell .ProseMirror[contenteditable="true"] {
+  user-select: text;
+  -webkit-user-select: text;
+  caret-color: auto;
+}
 .md-shell .hl-mark { background: #fde047; }
 .md-shell .hl-mark.current { background: #fb923c; }
 
@@ -777,6 +801,43 @@ input[type="text"]:focus, .modal-card input:focus {
   margin: 0 6px;
   flex: 0 0 auto;
 }
+
+.pm-split-prompt {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  margin: 0 0 8px;
+  background: var(--accent-soft);
+  border: 1px solid #c5d6cb;
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+}
+.pm-split-prompt label {
+  color: var(--text);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.pm-split-prompt input {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 4px 8px;
+  min-width: 160px;
+  font-size: 12px;
+  outline: none;
+  background: #fff;
+}
+.pm-split-prompt input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-ring);
+}
+.pm-split-prompt .pm-split-actions {
+  display: flex;
+  gap: 6px;
+  margin-left: auto;
+}
+
 .pm-toolbar-grow { flex: 1; min-width: 8px; }
 .pm-hint {
   font-size: 11px;

@@ -52,6 +52,10 @@ export default function PageManageModal({ doc, onPdfMutated }: Props): JSX.Eleme
   const [draftDirty, setDraftDirty] = useState(false)
   /** Merge staged in draft — confirm adds result to open list instead of overwriting current. */
   const [mergeStaged, setMergeStaged] = useState(false)
+  /** Inline split form — Electron has no window.prompt (always null → former no-op). */
+  const [splitPrompt, setSplitPrompt] = useState<null | { mode: 'n' | 'ranges'; value: string }>(
+    null
+  )
   const [selected, setSelected] = useState<number[]>([])
   const [pageCount, setPageCount] = useState(0)
   const [activePage, setActivePage] = useState(0)
@@ -517,21 +521,25 @@ export default function PageManageModal({ doc, onPdfMutated }: Props): JSX.Eleme
     }
   }
 
-  const onSplitN = async (): Promise<void> => {
+  const runSplitEveryN = async (n: number): Promise<void> => {
     if (disabled || !draftData || !doc) return
-    const n = Number(window.prompt('每 N 页拆分', '1') || '0')
-    if (!n || n < 1) return
+    if (!Number.isFinite(n) || n < 1) {
+      setStatus('请输入有效的每段页数（≥1）')
+      return
+    }
     try {
       setBusy(true)
-      const parts = await window.api.pdf.splitEveryN(draftData, n)
-      for (let i = 0; i < parts.length; i++) {
-        const path = await window.api.saveFileDialog({
-          defaultPath: `${doc.name.replace(/\.pdf$/i, '')}-part${i + 1}.pdf`,
-          filters: [{ name: 'PDF', extensions: ['pdf'] }]
-        })
-        if (path) await window.api.writeFile(path, parts[i])
-      }
-      setStatus(`已拆分为 ${parts.length} 个文件`)
+      const parts = await window.api.pdf.splitEveryN(draftData, Math.floor(n))
+      const base = doc.name.replace(/\.pdf$/i, '') || 'document'
+      addOpenedFiles(
+        parts.map((data, i) => ({
+          path: null,
+          name: `${base}-part${i + 1}.pdf`,
+          data: cloneBuffer(data)
+        }))
+      )
+      setSplitPrompt(null)
+      setStatus(`已按每 ${Math.floor(n)} 页拆分为 ${parts.length} 个文件（已加入打开列表）`)
     } catch (e) {
       setStatus(`操作失败: ${String(e)}`)
     } finally {
@@ -539,29 +547,59 @@ export default function PageManageModal({ doc, onPdfMutated }: Props): JSX.Eleme
     }
   }
 
-  const onSplitRanges = async (): Promise<void> => {
+  const runSplitRanges = async (raw: string): Promise<void> => {
     if (disabled || !draftData || !doc) return
-    const raw = window.prompt('页码范围（如 1-3,5-6，1 起算）', '1-1')
-    if (!raw) return
+    const trimmed = raw.trim()
+    if (!trimmed) {
+      setStatus('请输入页码范围')
+      return
+    }
     try {
       setBusy(true)
-      const ranges = raw.split(',').map((seg) => {
-        const [a, b] = seg.split('-').map((x) => Number(x.trim()) - 1)
-        return { start: a, end: Number.isFinite(b) ? b : a }
+      const ranges = trimmed.split(',').map((seg) => {
+        const bits = seg.split('-').map((x) => Number(x.trim()))
+        const a = bits[0]
+        const b = bits.length > 1 ? bits[1] : a
+        if (!Number.isFinite(a) || a < 1) throw new Error(`无效范围: ${seg}`)
+        const start = a - 1
+        const end = (Number.isFinite(b) ? b : a) - 1
+        if (end < start) throw new Error(`无效范围: ${seg}`)
+        return { start, end }
       })
       const parts = await window.api.pdf.splitRanges(draftData, ranges)
-      for (let i = 0; i < parts.length; i++) {
-        const path = await window.api.saveFileDialog({
-          defaultPath: `${doc.name.replace(/\.pdf$/i, '')}-range${i + 1}.pdf`,
-          filters: [{ name: 'PDF', extensions: ['pdf'] }]
-        })
-        if (path) await window.api.writeFile(path, parts[i])
-      }
-      setStatus(`已按范围拆分 ${parts.length} 个文件`)
+      const base = doc.name.replace(/\.pdf$/i, '') || 'document'
+      addOpenedFiles(
+        parts.map((data, i) => ({
+          path: null,
+          name: `${base}-range${i + 1}.pdf`,
+          data: cloneBuffer(data)
+        }))
+      )
+      setSplitPrompt(null)
+      setStatus(`已按范围拆分 ${parts.length} 个文件（已加入打开列表）`)
     } catch (e) {
       setStatus(`操作失败: ${String(e)}`)
     } finally {
       setBusy(false)
+    }
+  }
+
+  const onSplitN = (): void => {
+    if (disabled) return
+    setSplitPrompt({ mode: 'n', value: '1' })
+  }
+
+  const onSplitRanges = (): void => {
+    if (disabled) return
+    setSplitPrompt({ mode: 'ranges', value: '1-1' })
+  }
+
+  const submitSplitPrompt = (): void => {
+    if (!splitPrompt) return
+    if (splitPrompt.mode === 'n') {
+      void runSplitEveryN(Number(splitPrompt.value))
+    } else {
+      void runSplitRanges(splitPrompt.value)
     }
   }
 
@@ -616,6 +654,7 @@ export default function PageManageModal({ doc, onPdfMutated }: Props): JSX.Eleme
     setDraftData(null)
     setDraftDirty(false)
     setMergeStaged(false)
+    setSplitPrompt(null)
     setSelected([])
     setOpen(false)
     setStatus('已取消页面管理')
@@ -648,6 +687,7 @@ export default function PageManageModal({ doc, onPdfMutated }: Props): JSX.Eleme
     setDraftData(null)
     setDraftDirty(false)
     setMergeStaged(false)
+    setSplitPrompt(null)
     setOpen(false)
   }, [addOpenedFiles, draftDirty, onPdfMutated, releaseSlots, setOpen, setStatus, updateDoc])
 
@@ -689,10 +729,10 @@ export default function PageManageModal({ doc, onPdfMutated }: Props): JSX.Eleme
         >
           <FileOutput size={16} strokeWidth={1.75} />
         </IconAction>
-        <IconAction tip="按 N 页拆分" disabled={disabled} onClick={() => void onSplitN()}>
+        <IconAction tip="按 N 页拆分" disabled={disabled} onClick={onSplitN}>
           <Scissors size={16} strokeWidth={1.75} />
         </IconAction>
-        <IconAction tip="按范围拆分" disabled={disabled} onClick={() => void onSplitRanges()}>
+        <IconAction tip="按范围拆分" disabled={disabled} onClick={onSplitRanges}>
           <SquareDashed size={16} strokeWidth={1.75} />
         </IconAction>
         <IconAction tip="合并 PDF…" disabled={disabled} onClick={() => void onMerge()}>
@@ -707,6 +747,38 @@ export default function PageManageModal({ doc, onPdfMutated }: Props): JSX.Eleme
               }`}
         </span>
       </div>
+
+      {splitPrompt && (
+        <div className="pm-split-prompt" role="form" aria-label="拆分参数">
+          <label htmlFor="pm-split-input">
+            {splitPrompt.mode === 'n' ? '每 N 页拆分' : '页码范围（如 1-3,5-6）'}
+          </label>
+          <input
+            id="pm-split-input"
+            autoFocus
+            value={splitPrompt.value}
+            disabled={busy}
+            onChange={(e) => setSplitPrompt({ ...splitPrompt, value: e.target.value })}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault()
+                submitSplitPrompt()
+              } else if (e.key === 'Escape') {
+                e.preventDefault()
+                setSplitPrompt(null)
+              }
+            }}
+          />
+          <div className="pm-split-actions">
+            <button type="button" className="btn-ghost" disabled={busy} onClick={() => setSplitPrompt(null)}>
+              取消
+            </button>
+            <button type="button" className="btn-primary" disabled={busy} onClick={submitSplitPrompt}>
+              拆分
+            </button>
+          </div>
+        </div>
+      )}
 
       <div className="pm-workspace">
         {!doc || doc.kind !== 'pdf' ? (
