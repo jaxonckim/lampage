@@ -535,7 +535,8 @@ export default function PageManageModal({ doc, onPdfMutated }: Props): JSX.Eleme
         parts.map((data, i) => ({
           path: null,
           name: `${base}-part${i + 1}.pdf`,
-          data: cloneBuffer(data)
+          data: cloneBuffer(data),
+          dirty: true
         }))
       )
       setSplitPrompt(null)
@@ -572,7 +573,8 @@ export default function PageManageModal({ doc, onPdfMutated }: Props): JSX.Eleme
         parts.map((data, i) => ({
           path: null,
           name: `${base}-range${i + 1}.pdf`,
-          data: cloneBuffer(data)
+          data: cloneBuffer(data),
+          dirty: true
         }))
       )
       setSplitPrompt(null)
@@ -670,7 +672,7 @@ export default function PageManageModal({ doc, onPdfMutated }: Props): JSX.Eleme
     if (mergeRef.current) {
       const base = current.name.replace(/\.pdf$/i, '') || 'document'
       const name = `${base}-merged.pdf`
-      addOpenedFiles([{ path: null, name, data: cloneBuffer(data) }])
+      addOpenedFiles([{ path: null, name, data: cloneBuffer(data), dirty: true }])
       setStatus(`已将合并结果加入打开列表：${name}`)
     } else if (draftDirty) {
       onPdfMutated(data)

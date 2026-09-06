@@ -136,7 +136,21 @@ const api = {
   },
 
   /** Flush argv / open-file paths queued before the renderer subscribed. */
-  rendererReady: (): Promise<OpenedFile[]> => ipcRenderer.invoke('app:renderer-ready')
+  rendererReady: (): Promise<OpenedFile[]> => ipcRenderer.invoke('app:renderer-ready'),
+
+  /** Main asks renderer whether to allow window close / quit (dirty docs). */
+  onConfirmClose: (cb: () => void): (() => void) => {
+    const handler = (): void => cb()
+    ipcRenderer.on('app:confirm-close', handler)
+    return () => {
+      ipcRenderer.removeListener('app:confirm-close', handler)
+    }
+  },
+
+  /** Reply to app:confirm-close — true proceeds with close/quit. */
+  confirmCloseResponse: (proceed: boolean): void => {
+    ipcRenderer.send('app:confirm-close-response', proceed)
+  }
 }
 
 contextBridge.exposeInMainWorld('api', api)

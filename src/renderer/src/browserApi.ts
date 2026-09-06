@@ -194,7 +194,9 @@ export function installBrowserApi(): void {
     },
     onOpenFiles: (_cb) => () => undefined,
     rendererReady: async () => [],
-    onMenu: (_channel, _cb) => () => undefined
+    onMenu: (_channel, _cb) => () => undefined,
+    onConfirmClose: (_cb) => () => undefined,
+    confirmCloseResponse: (_proceed) => undefined
   }
 
   window.api = api

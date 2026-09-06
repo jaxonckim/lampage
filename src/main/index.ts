@@ -34,6 +34,11 @@ import { runPrintJob } from './printDocument'
 
 let mainWindow: BrowserWindow | null = null
 
+/** When true, BrowserWindow `close` may proceed (renderer confirmed or no dirty docs). */
+let allowWindowClose = false
+/** Prevent stacking multiple confirm-close prompts. */
+let closeConfirmPending = false
+
 /** Absolute paths the renderer may read/write after explicit user gestures (open/save/drop). */
 const allowedPaths = new Set<string>()
 
@@ -206,8 +211,21 @@ function createWindow(): void {
     }
   })
 
+  allowWindowClose = false
+  closeConfirmPending = false
+
   mainWindow.on('ready-to-show', () => {
     mainWindow?.show()
+  })
+
+  // Ask renderer before closing when dirty docs exist (covers window X and menu Quit).
+  mainWindow.on('close', (e) => {
+    if (allowWindowClose) return
+    e.preventDefault()
+    if (closeConfirmPending) return
+    if (!mainWindow || mainWindow.isDestroyed()) return
+    closeConfirmPending = true
+    mainWindow.webContents.send('app:confirm-close')
   })
 
   mainWindow.webContents.setWindowOpenHandler((details) => {
@@ -573,6 +591,19 @@ function registerIpc(): void {
     return true
   })
 
+  // Renderer answered the dirty-docs quit/close prompt.
+  ipcMain.on('app:confirm-close-response', (_e, proceed: unknown) => {
+    closeConfirmPending = false
+    if (proceed !== true) return
+    allowWindowClose = true
+    const win = mainWindow
+    if (win && !win.isDestroyed()) {
+      win.close()
+    } else {
+      app.quit()
+    }
+  })
+
   // Renderer signals it subscribed to app:open-files — flush cold-start argv paths.
   ipcMain.handle('app:renderer-ready', async () => {
     rendererReady = true
@@ -611,6 +642,8 @@ if (!gotSingleInstanceLock) {
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) {
         rendererReady = false
+        allowWindowClose = false
+        closeConfirmPending = false
         createWindow()
       }
     })

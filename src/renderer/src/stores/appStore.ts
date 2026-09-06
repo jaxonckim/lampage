@@ -96,7 +96,7 @@ interface AppState {
   closeDoc: (id: string) => void
   updateDoc: (id: string, patch: Partial<OpenDoc>) => void
   addOpenedFiles: (
-    files: Array<{ path: string | null; name: string; data: ArrayBuffer }>
+    files: Array<{ path: string | null; name: string; data: ArrayBuffer; dirty?: boolean }>
   ) => void
   activeDoc: () => OpenDoc | null
 }
@@ -245,7 +245,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         kind,
         data: f.data,
         text: kind === 'md' ? decodeText(f.data) : undefined,
-        dirty: false,
+        dirty: f.dirty ?? false,
         zoom: 1,
         currentPage: 0,
         pageCount: undefined,

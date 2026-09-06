@@ -140,6 +140,33 @@ export default function App(): JSX.Element {
     }
   }, [addOpenedFiles])
 
+  // Main-process window close / quit: confirm when any open doc is dirty
+  useEffect(() => {
+    const off = window.api.onConfirmClose?.(() => {
+      const dirtyDocs = useAppStore.getState().docs.filter((d) => d.dirty)
+      if (!dirtyDocs.length) {
+        window.api.confirmCloseResponse?.(true)
+        return
+      }
+      const list =
+        dirtyDocs.length <= 5
+          ? dirtyDocs.map((d) => `「${d.name}」`).join('、')
+          : `${dirtyDocs
+              .slice(0, 5)
+              .map((d) => `「${d.name}」`)
+              .join('、')} 等 ${dirtyDocs.length} 个文件`
+      const ok = window.confirm(
+        dirtyDocs.length === 1
+          ? `${list}有未保存的更改，确定退出？`
+          : `以下文件有未保存的更改，确定退出？\n${list}`
+      )
+      window.api.confirmCloseResponse?.(ok)
+    })
+    return () => {
+      off?.()
+    }
+  }, [])
+
   // Ctrl/Cmd shortcuts (prevent browser defaults in Electron / web preview)
   // Do not intercept Ctrl/Cmd+C — native copy must work for PDF/MD selection.
   useEffect(() => {
