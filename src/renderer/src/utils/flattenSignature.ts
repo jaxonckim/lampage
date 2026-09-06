@@ -1,4 +1,4 @@
-import { loadPdf } from './pdfjs'
+import { loadPdf, renderPage } from './pdfjs'
 
 export type FlattenSigItem = {
   pageIndex: number
@@ -41,7 +41,7 @@ async function flattenOnePage(
     ctx.fillStyle = '#ffffff'
     ctx.fillRect(0, 0, canvas.width, canvas.height)
 
-    await page.render({ canvasContext: ctx, viewport }).promise
+    await renderPage(page, { canvasContext: ctx, viewport }).promise
 
     for (const item of items) {
       const blob = new Blob([item.imageData], {

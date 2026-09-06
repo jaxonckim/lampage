@@ -8,3 +8,6 @@ release
 .vscode/*
 !.vscode/extensions.json
 scripts/.print-harness/
+
+# Generated from pdfjs-dist by scripts/sync-pdfjs-assets.mjs
+src/renderer/public/pdfjs/

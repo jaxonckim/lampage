@@ -1,4 +1,5 @@
 import { resolve } from 'path'
+import { execFileSync } from 'child_process'
 import { defineConfig, externalizeDepsPlugin } from 'electron-vite'
 import type { Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
@@ -7,6 +8,24 @@ const DEV_CSP =
   "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; worker-src 'self' blob:; connect-src 'self' blob: ws: wss: http: https:;"
 const PROD_CSP =
   "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; worker-src 'self' blob:; connect-src 'self' blob:;"
+
+/** Keep public/pdfjs/{cmaps,standard_fonts} in sync with pdfjs-dist (CJK + standard fonts). */
+function syncPdfjsAssets(): Plugin {
+  const run = (): void => {
+    execFileSync(process.execPath, [resolve(__dirname, 'scripts/sync-pdfjs-assets.mjs')], {
+      stdio: 'inherit'
+    })
+  }
+  return {
+    name: 'lampage-sync-pdfjs-assets',
+    buildStart() {
+      run()
+    },
+    configureServer() {
+      run()
+    }
+  }
+}
 
 function lampageCsp(): Plugin {
   return {
@@ -58,7 +77,7 @@ export default defineConfig({
         '@shared': resolve(__dirname, 'src/shared')
       }
     },
-    plugins: [react(), lampageCsp()],
+    plugins: [syncPdfjsAssets(), react(), lampageCsp()],
     build: {
       rollupOptions: {
         input: {

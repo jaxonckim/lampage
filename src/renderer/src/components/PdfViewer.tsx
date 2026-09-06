@@ -1,6 +1,6 @@
 import { useEffect, useRef, useCallback } from 'react'
 import type { PDFDocumentProxy, PDFPageProxy, RenderTask } from 'pdfjs-dist'
-import { loadPdf, pdfjs } from '../utils/pdfjs'
+import { loadPdf, pdfjs, renderPage } from '../utils/pdfjs'
 import type { OpenDoc } from '../types/docs'
 import { useAppStore } from '../stores/appStore'
 import { isPageSyncSuppressed } from '../utils/pageSync'
@@ -201,7 +201,7 @@ export default function PdfViewer({
 
       const transform = outputScale !== 1 ? [outputScale, 0, 0, outputScale, 0, 0] : undefined
       try {
-        const task = page.render({ canvasContext: ctx, viewport, transform })
+        const task = renderPage(page, { canvasContext: ctx, viewport, transform })
         activeRenderTasks.current.add(task)
         await task.promise
         activeRenderTasks.current.delete(task)

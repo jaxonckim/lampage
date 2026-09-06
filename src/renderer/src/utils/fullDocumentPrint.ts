@@ -2,7 +2,7 @@
  * Prepare full-document print content (all PDF pages / full MD), chrome-free.
  * Used by the browser shim and as a multi-page HTML fallback/verify path.
  */
-import { loadPdf } from './pdfjs'
+import { loadPdf, renderPage } from './pdfjs'
 
 const PRINT_SCALE = 1.5
 /** Soft cap: beyond this, browser falls back to embedding the PDF blob. */
@@ -153,7 +153,7 @@ export async function buildPdfPrintHtml(
       if (!ctx) throw new Error('Canvas unavailable')
       canvas.width = Math.floor(viewport.width)
       canvas.height = Math.floor(viewport.height)
-      await page.render({ canvasContext: ctx, viewport }).promise
+      await renderPage(page, { canvasContext: ctx, viewport }).promise
       const url = canvas.toDataURL('image/jpeg', 0.92)
       // Do not force pixel width on the surface — CSS max-width/max-height keeps one sheet.
       parts.push(

@@ -12,7 +12,7 @@ import {
 } from 'lucide-react'
 import type { OpenDoc } from '../types/docs'
 import { useAppStore } from '../stores/appStore'
-import { loadPdf } from '../utils/pdfjs'
+import { loadPdf, renderPage } from '../utils/pdfjs'
 import { uid } from '../utils/id'
 import Modal from './Modal'
 
@@ -173,7 +173,7 @@ export default function PageManageModal({ doc, onPdfMutated }: Props): JSX.Eleme
           const canvas = document.createElement('canvas')
           canvas.width = Math.max(1, Math.floor(viewport.width))
           canvas.height = Math.max(1, Math.floor(viewport.height))
-          await page.render({ canvasContext: canvas.getContext('2d')!, viewport }).promise
+          await renderPage(page, { canvasContext: canvas.getContext('2d')!, viewport }).promise
           if (token !== syncToken.current) return
           const bmp = await createImageBitmap(canvas)
           if (token !== syncToken.current) {

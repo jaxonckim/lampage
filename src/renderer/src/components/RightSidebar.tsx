@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { loadPdf, getOutline } from '../utils/pdfjs'
+import { loadPdf, getOutline, renderPage } from '../utils/pdfjs'
 import type { OpenDoc, OutlineItem, TocItem } from '../types/docs'
 import { useAppStore } from '../stores/appStore'
 import { suppressPageSync } from '../utils/pageSync'
@@ -142,7 +142,7 @@ export default function RightSidebar({
           item.appendChild(label)
           root.appendChild(item)
 
-          await page.render({ canvasContext: canvas.getContext('2d')!, viewport }).promise
+          await renderPage(page, { canvasContext: canvas.getContext('2d')!, viewport }).promise
 
           item.onclick = (e) => {
             const d = docRef.current
