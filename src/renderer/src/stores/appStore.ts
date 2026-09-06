@@ -24,6 +24,15 @@ function revokeUrl(url: string | undefined | null): void {
   }
 }
 
+/**
+ * Equality key for real filesystem paths when deduping open docs.
+ * Unifies separators and lowercases so Windows paths match across
+ * mixed slash style / drive-letter case. `null` paths are never keyed.
+ */
+function openPathKey(path: string): string {
+  return path.replace(/\\/g, '/').toLowerCase()
+}
+
 /** Placed signature overlay (PDF page units / points). Kept until 嵌入. */
 export type SignatureOverlay = {
   id: string
@@ -236,9 +245,31 @@ export const useAppStore = create<AppState>((set, get) => ({
       docs: get().docs.map((d) => (d.id === id ? { ...d, ...patch } : d))
     }),
   addOpenedFiles: (files) => {
-    const next: OpenDoc[] = files.map((f) => {
+    if (!files.length) return
+
+    const docs = [...get().docs]
+    const pathToId = new Map<string, string>()
+    for (const d of docs) {
+      if (d.path != null) pathToId.set(openPathKey(d.path), d.id)
+    }
+
+    const added: OpenDoc[] = []
+    let focusId: string | null = null
+
+    for (const f of files) {
+      if (f.path != null) {
+        const key = openPathKey(f.path)
+        const existingId = pathToId.get(key)
+        if (existingId) {
+          // Same real path already open (or earlier in this batch) — focus it.
+          focusId = existingId
+          continue
+        }
+      }
+
+      // path: null (unsaved page-mgmt splits, etc.) is always unique — never dedupe.
       const kind = kindFromName(f.name)
-      return {
+      const doc: OpenDoc = {
         id: uid(),
         path: f.path,
         name: f.name,
@@ -251,12 +282,25 @@ export const useAppStore = create<AppState>((set, get) => ({
         pageCount: undefined,
         selectedPages: []
       }
-    })
-    const docs = [...get().docs, ...next]
+      docs.push(doc)
+      added.push(doc)
+      if (f.path != null) pathToId.set(openPathKey(f.path), doc.id)
+      focusId = doc.id
+    }
+
+    if (!focusId) return
+
+    const focused = docs.find((d) => d.id === focusId) ?? null
     set({
       docs,
-      activeId: next[next.length - 1]?.id ?? get().activeId,
-      status: `已打开 ${next.length} 个文件`
+      activeId: focusId,
+      rightTab: focused?.kind === 'md' ? 'outline' : get().rightTab,
+      mdEditMode: false,
+      status: added.length
+        ? `已打开 ${added.length} 个文件`
+        : focused
+          ? `已切换到 ${focused.name}`
+          : get().status
     })
   },
   activeDoc: () => {
