@@ -52,6 +52,14 @@ button, input, select, textarea { font-family: inherit; }
 }
 *::-webkit-scrollbar-thumb:hover { background: #a8b3a8; }
 
+@font-face {
+  font-family: 'EB Garamond';
+  src: url('/fonts/EBGaramond.ttf') format('truetype');
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
 .app-shell {
   display: grid;
   grid-template-rows: auto 1fr var(--status-h);
@@ -77,12 +85,14 @@ button, input, select, textarea { font-family: inherit; }
 }
 
 .app-header .brand {
-  font-weight: 650;
-  font-size: 13px;
+  font-family: 'EB Garamond', 'Times New Roman', serif;
+  font-weight: 600;
+  font-size: 22px;
   letter-spacing: 0.02em;
   color: var(--accent);
   margin-left: 2px;
   margin-right: 4px;
+  line-height: 1;
 }
 
 .btn-primary {
@@ -374,8 +384,9 @@ button, input, select, textarea { font-family: inherit; }
   padding: 24px;
 }
 .empty-brand {
-  font-size: 22px;
-  font-weight: 700;
+  font-family: 'EB Garamond', 'Times New Roman', serif;
+  font-size: 32px;
+  font-weight: 600;
   color: var(--accent);
   margin-bottom: 8px;
   letter-spacing: 0.02em;
