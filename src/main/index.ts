@@ -30,6 +30,7 @@ import {
   assertPdfList,
   assertInt
 } from './pdfIpcValidate'
+import { runPrintJob } from './printDocument'
 
 let mainWindow: BrowserWindow | null = null
 
@@ -332,13 +333,31 @@ function registerIpc(): void {
     return files
   })
 
-  ipcMain.handle('print:current', async () => {
-    if (!mainWindow) return false
-    return new Promise<boolean>((resolvePromise) => {
-      mainWindow!.webContents.print({ silent: false, printBackground: true }, (success) => {
-        resolvePromise(success)
+  // Full-document print (hidden window) — never screenshot the main app chrome.
+  ipcMain.handle('print:document', async (_e, payload: unknown) => {
+    if (!payload || typeof payload !== 'object') throw new Error('Invalid print payload')
+    const p = payload as Record<string, unknown>
+    if (p.kind === 'pdf') {
+      return runPrintJob({ kind: 'pdf', data: assertPdfBytes(p.data) })
+    }
+    if (p.kind === 'md') {
+      if (typeof p.html !== 'string') throw new Error('Invalid MD html')
+      return runPrintJob({
+        kind: 'md',
+        html: p.html,
+        title: typeof p.title === 'string' ? p.title : undefined
       })
-    })
+    }
+    if (p.kind === 'html') {
+      if (typeof p.html !== 'string') throw new Error('Invalid html')
+      return runPrintJob({
+        kind: 'html',
+        html: p.html,
+        title: typeof p.title === 'string' ? p.title : undefined,
+        pageCount: typeof p.pageCount === 'number' ? p.pageCount : undefined
+      })
+    }
+    throw new Error('Invalid print kind')
   })
 
   // PDF ops (validated args — DoS / throw hardening, not a sandbox substitute)

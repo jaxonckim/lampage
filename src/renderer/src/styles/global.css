@@ -666,7 +666,7 @@ button, input, select, textarea { font-family: inherit; }
 .sig-list { display: flex; flex-wrap: wrap; gap: 8px; }
 .sig-list img {
   width: 88px; height: 48px; object-fit: contain;
-  border: 1px solid var(--border); border-radius: var(--radius-sm); background: #fff; cursor: pointer;
+  border: 1px solid var(--border); border-radius: var(--radius-sm); background: #fff; cursor: grab;
 }
 .sig-list img:hover { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-ring); }
 .page-ops-grid {
@@ -938,6 +938,52 @@ body.sig-place-mode .textLayer {
   pointer-events: none !important;
 }
 
+/* Semi-transparent signature that follows the pointer until click-to-place */
+.sig-place-ghost {
+  position: fixed;
+  z-index: 50;
+  pointer-events: none;
+  opacity: 0.45;
+  box-sizing: border-box;
+  border: 1.5px dashed rgba(20, 61, 46, 0.55);
+  background: transparent;
+  overflow: hidden;
+}
+.sig-place-ghost img {
+  width: 100%;
+  height: 100%;
+  object-fit: fill;
+  display: block;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+/* Delete control on selected overlay */
+.sig-placer-delete {
+  position: absolute;
+  top: -10px;
+  right: -10px;
+  z-index: 3;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 1.5px solid var(--accent);
+  border-radius: 50%;
+  background: #fff;
+  color: var(--accent);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+.sig-placer-delete:hover {
+  background: var(--accent);
+  color: #fff;
+}
+
 /* Transparent handwritten pad + list preview (checkerboard) */
 .sig-pad-transparent {
   background-color: #f3f4f6;
@@ -959,6 +1005,11 @@ body.sig-place-mode .textLayer {
     linear-gradient(-45deg, transparent 75%, #e5e7eb 75%);
   background-size: 12px 12px;
   background-position: 0 0, 0 6px, 6px -6px, -6px 0;
+  cursor: grab;
+}
+.sig-list-item.dragging {
+  opacity: 0.55;
+  cursor: grabbing;
 }
 .sig-placer.selected {
   border-style: solid;
@@ -966,4 +1017,84 @@ body.sig-place-mode .textLayer {
 }
 .sig-placer {
   background: transparent;
+}
+
+/* ===== Print (defense-in-depth for MD / accidental window.print) =====
+   Primary Electron/browser print uses a dedicated chrome-free document.
+   These rules hide app chrome if the main window is ever printed. */
+@media print {
+  @page { margin: 12mm; }
+
+  html, body, #root {
+    height: auto !important;
+    overflow: visible !important;
+    background: #fff !important;
+  }
+
+  .app-header,
+  .function-bar,
+  .secondary-toolbar,
+  .top-chrome,
+  .sidebar,
+  .sidebar-placeholder,
+  .splitter,
+  .status-bar,
+  .find-bar,
+  .selection-copy-btn,
+  .drag-overlay,
+  .modal-backdrop,
+  .sig-placer,
+  .sig-place-ghost,
+  .right-sidebar,
+  .left-sidebar,
+  button.code-copy-btn {
+    display: none !important;
+  }
+
+  .app-shell,
+  .body-row,
+  .center-pane,
+  .content-row,
+  .viewer-wrap {
+    display: block !important;
+    height: auto !important;
+    width: 100% !important;
+    overflow: visible !important;
+    grid-template-columns: none !important;
+    grid-template-rows: none !important;
+  }
+
+  .viewer,
+  .pdf-viewer,
+  .md-shell {
+    overflow: visible !important;
+    height: auto !important;
+    max-height: none !important;
+    box-shadow: none !important;
+    background: #fff !important;
+  }
+
+  .pdf-zoom-sizer,
+  .pdf-pages {
+    position: static !important;
+    transform: none !important;
+    width: auto !important;
+    height: auto !important;
+    left: auto !important;
+  }
+
+  .pdf-page-wrap {
+    page-break-after: always;
+    break-after: page;
+    box-shadow: none !important;
+    margin: 0 auto 8px !important;
+  }
+  .pdf-page-wrap:last-child {
+    page-break-after: auto;
+    break-after: auto;
+  }
+
+  .md-shell .ProseMirror {
+    min-height: 0 !important;
+  }
 }

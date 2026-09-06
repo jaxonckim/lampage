@@ -11,6 +11,12 @@ import {
   embedSignatureImage,
   replacePageWithImage
 } from '@shared/pdfOps'
+import {
+  printMdInBrowser,
+  printPdfInBrowser,
+  printHtmlInIframe,
+  getActiveMarkdownHtml
+} from './utils/fullDocumentPrint'
 
 type OpenedFile = { path: string; name: string; data: ArrayBuffer }
 type JckApi = Window['api']
@@ -125,9 +131,18 @@ export function installBrowserApi(): void {
       // Electron-only path list; browser drop handled in App with File objects.
       return []
     },
-    print: async () => {
-      window.print()
-      return true
+    print: async (payload) => {
+      if (payload.kind === 'pdf') {
+        return printPdfInBrowser(payload.data, 'document.pdf')
+      }
+      if (payload.kind === 'md') {
+        const html = payload.html || getActiveMarkdownHtml()
+        return printMdInBrowser(html, payload.title || 'document')
+      }
+      if (payload.kind === 'html') {
+        return printHtmlInIframe(payload.html)
+      }
+      return false
     },
     pdf: {
       deletePages: async (data, indexes) =>

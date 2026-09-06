@@ -13,6 +13,7 @@ import SignaturePlacer from './components/SignaturePlacer'
 import { useAppStore, syncMdTextToData } from './stores/appStore'
 import type { TocItem } from './types/docs'
 import { suppressPageSync } from './utils/pageSync'
+import { getActiveMarkdownHtml } from './utils/fullDocumentPrint'
 
 export default function App(): JSX.Element {
   const docs = useAppStore((s) => s.docs)
@@ -87,13 +88,31 @@ export default function App(): JSX.Element {
   )
 
   const printDoc = useCallback(async () => {
-    await window.api.print()
-  }, [])
+    if (!doc) {
+      setStatus('没有可打印的文档')
+      return
+    }
+    setStatus('正在准备打印…')
+    try {
+      if (doc.kind === 'pdf') {
+        // Electron: native full-PDF print in a hidden window (all pages, no chrome).
+        // Browser shim: multi-page HTML surfaces / blob PDF (see browserApi).
+        await window.api.print({ kind: 'pdf', data: doc.data })
+      } else {
+        const html = getActiveMarkdownHtml() || doc.text || ''
+        await window.api.print({ kind: 'md', html, title: doc.name })
+      }
+      setStatus('已发送到打印')
+    } catch (err) {
+      setStatus(`打印失败: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }, [doc, setStatus])
 
   const exportMdPdf = useCallback(async () => {
     if (!doc || doc.kind !== 'md') return
     setStatus('请在打印对话框中选择“另存为 PDF”')
-    await window.api.print()
+    const html = getActiveMarkdownHtml() || doc.text || ''
+    await window.api.print({ kind: 'md', html, title: doc.name })
   }, [doc, setStatus])
 
   useEffect(() => {

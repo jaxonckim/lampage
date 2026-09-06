@@ -33,6 +33,8 @@ export default function SignaturePlacer({ onPdfMutated }: Props): JSX.Element | 
   const docs = useAppStore((s) => s.docs)
   const [busy, setBusy] = useState(false)
   const [hosts, setHosts] = useState<Record<string, HTMLElement | null>>({})
+  /** Screen coords for place-mode ghost preview (follows pointer). */
+  const [cursorPos, setCursorPos] = useState<{ x: number; y: number } | null>(null)
   const dragRef = useRef<{
     id: string
     mode: DragMode
@@ -149,11 +151,19 @@ export default function SignaturePlacer({ onPdfMutated }: Props): JSX.Element | 
       )
     }
 
+    const onMove = (e: MouseEvent): void => {
+      setCursorPos({ x: e.clientX, y: e.clientY })
+    }
+
     document.addEventListener('click', onClick, true)
+    document.addEventListener('mousemove', onMove, true)
     document.body.classList.add('sig-place-mode')
+    setCursorPos(null)
     return () => {
       document.removeEventListener('click', onClick, true)
+      document.removeEventListener('mousemove', onMove, true)
       document.body.classList.remove('sig-place-mode')
+      setCursorPos(null)
     }
   }, [pending, doc, addOverlay, setStatus])
 
@@ -163,6 +173,16 @@ export default function SignaturePlacer({ onPdfMutated }: Props): JSX.Element | 
     setPending(null)
     setStatus('已取消签名放置')
   }, [doc, clearOverlays, setPending, setStatus])
+
+  const deleteSelected = useCallback(() => {
+    const id = useAppStore.getState().signatureSelectedId
+    if (!id) {
+      setStatus('请先点击选中要删除的签名')
+      return
+    }
+    removeOverlay(id)
+    setStatus('已移除签名')
+  }, [removeOverlay, setStatus])
 
   const confirmEmbed = useCallback(async () => {
     if (!doc || doc.kind !== 'pdf' || busy) return
@@ -226,8 +246,7 @@ export default function SignaturePlacer({ onPdfMutated }: Props): JSX.Element | 
         const t = e.target as HTMLElement | null
         if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return
         e.preventDefault()
-        removeOverlay(selectedId)
-        setStatus('已移除签名')
+        deleteSelected()
       }
     }
     window.addEventListener('keydown', onKey)
@@ -238,9 +257,9 @@ export default function SignaturePlacer({ onPdfMutated }: Props): JSX.Element | 
     selectedId,
     cancelAll,
     confirmEmbed,
+    deleteSelected,
     setPending,
-    setStatus,
-    removeOverlay
+    setStatus
   ])
 
   const onPointerDown =
@@ -411,20 +430,65 @@ export default function SignaturePlacer({ onPdfMutated }: Props): JSX.Element | 
               onPointerDown={onPointerDown(o.id, h)}
             />
           ))}
+        {selected && (
+          <button
+            type="button"
+            className="sig-placer-delete"
+            title="删除此签名 (Del)"
+            aria-label="删除此签名"
+            onPointerDown={(e) => {
+              e.preventDefault()
+              e.stopPropagation()
+            }}
+            onClick={(e) => {
+              e.preventDefault()
+              e.stopPropagation()
+              deleteSelected()
+            }}
+          >
+            ×
+          </button>
+        )}
       </div>
     )
     return createPortal(overlay, host)
   })
 
+  const ghostW = pending ? pending.widthPt * scale : 0
+  const ghostH = pending ? pending.heightPt * scale : 0
+
   return (
     <>
       {portals}
+      {pending && cursorPos && (
+        <div
+          className="sig-place-ghost"
+          style={{
+            left: cursorPos.x - ghostW / 2,
+            top: cursorPos.y - ghostH / 2,
+            width: ghostW,
+            height: ghostH
+          }}
+          aria-hidden
+        >
+          <img src={pending.objectUrl} alt="" draggable={false} />
+        </div>
+      )}
       <div className="sig-placer-toolbar">
         <span className="sig-placer-hint">
           {pending
-            ? '点击页面放置签名 · Esc 取消放置'
-            : `已放置 ${relevantOverlays.length} 个 · 拖动移动 · 手柄缩放 · Shift 锁定比例 · Del 删除`}
+            ? '移动鼠标预览 · 点击页面放置 · Esc 取消放置'
+            : `已放置 ${relevantOverlays.length} 个 · 拖动移动 · 手柄缩放 · Shift 锁定比例 · 选中后 Del/删除`}
         </span>
+        <button
+          type="button"
+          className="btn-ghost"
+          disabled={busy || !selectedId}
+          onClick={deleteSelected}
+          title="删除选中的签名 (Del / Backspace)"
+        >
+          删除
+        </button>
         <button type="button" className="btn-ghost" disabled={busy} onClick={cancelAll}>
           取消
         </button>

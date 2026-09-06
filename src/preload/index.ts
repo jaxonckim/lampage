@@ -35,7 +35,19 @@ const api = {
       return ''
     }
   },
-  print: (): Promise<boolean> => ipcRenderer.invoke('print:current'),
+  print: (payload: {
+    kind: 'pdf'
+    data: ArrayBuffer
+  } | {
+    kind: 'md'
+    html: string
+    title?: string
+  } | {
+    kind: 'html'
+    html: string
+    title?: string
+    pageCount?: number
+  }): Promise<boolean> => ipcRenderer.invoke('print:document', payload),
 
   pdf: {
     deletePages: (data: ArrayBuffer, indexes: number[]) =>

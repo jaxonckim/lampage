@@ -294,7 +294,7 @@ export function FunctionBar({
             type="button"
             className="icon-btn"
             onClick={() => setSignatureOpen(true)}
-            title="签名"
+            title="签名 (Alt+S)"
             aria-label="签名"
           >
             <FilePenLine size={16} strokeWidth={1.75} />

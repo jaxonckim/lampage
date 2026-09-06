@@ -207,9 +207,16 @@ export default function MarkdownView({
   const shellRef = useRef<HTMLDivElement>(null)
   const matchIndex = useRef(0)
   const matchesRef = useRef<FindMatch[]>([])
+  /** Suppress dirty while TipTap hydrates / programmatic setContent (onUpdate fires on load). */
+  const suppressDirtyRef = useRef(true)
   const onFindStatsRef = useRef(onFindStats)
   onFindStatsRef.current = onFindStats
   const initialHtml = useMemo(() => markdownToHtml(doc.text || ''), [doc.id])
+
+  // New doc → suppress again until editor finishes initial create/transforms
+  useEffect(() => {
+    suppressDirtyRef.current = true
+  }, [doc.id])
 
   const refreshToc = useCallback(
     (dom: HTMLElement): void => {
@@ -276,14 +283,23 @@ export default function MarkdownView({
       content: initialHtml,
       editable: mdEditMode,
       onUpdate: ({ editor: ed }) => {
-        const md = htmlToMarkdown(ed.view.dom)
-        updateDoc(doc.id, { text: md, dirty: true })
         refreshToc(ed.view.dom)
         decorateCodeCopy(ed.view.dom)
+        // TipTap often fires onUpdate during initial setContent / extension transforms.
+        // Do not mark dirty (or rewrite text) until hydration completes.
+        if (suppressDirtyRef.current) return
+        const md = htmlToMarkdown(ed.view.dom)
+        updateDoc(doc.id, { text: md, dirty: true })
       },
       onCreate: ({ editor: ed }) => {
         refreshToc(ed.view.dom)
         decorateCodeCopy(ed.view.dom)
+        // Allow Typography / post-create transforms to settle, then arm dirty tracking
+        queueMicrotask(() => {
+          requestAnimationFrame(() => {
+            suppressDirtyRef.current = false
+          })
+        })
       }
     },
     [doc.id]
