@@ -70,6 +70,24 @@ const api = {
         imageData,
         mime,
         rect
+      ) as Promise<ArrayBuffer>,
+    /** Replace a page with a full-page raster (used by flatten-embed signatures). */
+    replacePageImage: (
+      data: ArrayBuffer,
+      pageIndex: number,
+      imageData: ArrayBuffer,
+      mime: 'png' | 'jpg',
+      pageWidth: number,
+      pageHeight: number
+    ) =>
+      ipcRenderer.invoke(
+        'pdf:replacePageImage',
+        data,
+        pageIndex,
+        imageData,
+        mime,
+        pageWidth,
+        pageHeight
       ) as Promise<ArrayBuffer>
   },
 

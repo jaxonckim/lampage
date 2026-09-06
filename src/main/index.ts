@@ -13,8 +13,23 @@ import {
   mergePdfs,
   rotatePages,
   duplicatePage,
-  embedSignatureImage
+  embedSignatureImage,
+  replacePageWithImage
 } from '../shared/pdfOps'
+import {
+  assertPdfBytes,
+  assertImageBytes,
+  assertPageIndex,
+  assertPageIndexes,
+  assertOrder,
+  assertAngle,
+  assertPositiveInt,
+  assertMime,
+  assertRect,
+  assertRanges,
+  assertPdfList,
+  assertInt
+} from './pdfIpcValidate'
 
 let mainWindow: BrowserWindow | null = null
 
@@ -118,6 +133,26 @@ function createWindow(): void {
       void shell.openExternal(details.url)
     }
     return { action: 'deny' }
+  })
+
+  // Deny in-window navigations away from the app shell (window-open already denied).
+  // Allow the initial loadURL/loadFile and same-origin / file: app documents.
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    let allowed = false
+    try {
+      const target = new URL(url)
+      if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
+        const dev = new URL(process.env['ELECTRON_RENDERER_URL'])
+        allowed = target.origin === dev.origin
+      } else {
+        allowed = target.protocol === 'file:'
+      }
+    } catch {
+      allowed = false
+    }
+    if (allowed) return
+    event.preventDefault()
+    if (isSafeExternalUrl(url)) void shell.openExternal(url)
   })
 
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
@@ -306,65 +341,92 @@ function registerIpc(): void {
     })
   })
 
-  // PDF ops
-  ipcMain.handle('pdf:deletePages', async (_e, data: ArrayBuffer, indexes: number[]) => {
-    const out = await deletePages(new Uint8Array(data), indexes)
+  // PDF ops (validated args — DoS / throw hardening, not a sandbox substitute)
+  ipcMain.handle('pdf:deletePages', async (_e, data: unknown, indexes: unknown) => {
+    const pdf = assertPdfBytes(data)
+    const out = await deletePages(new Uint8Array(pdf), assertPageIndexes(indexes))
     return out.buffer.slice(out.byteOffset, out.byteOffset + out.byteLength)
   })
-  ipcMain.handle('pdf:insertBlank', async (_e, data: ArrayBuffer, afterIndex: number) => {
-    const out = await insertBlankPage(new Uint8Array(data), afterIndex)
+  ipcMain.handle('pdf:insertBlank', async (_e, data: unknown, afterIndex: unknown) => {
+    const pdf = assertPdfBytes(data)
+    const out = await insertBlankPage(new Uint8Array(pdf), assertInt(afterIndex, 'afterIndex'))
     return out.buffer.slice(out.byteOffset, out.byteOffset + out.byteLength)
   })
-  ipcMain.handle('pdf:reorder', async (_e, data: ArrayBuffer, order: number[]) => {
-    const out = await reorderPages(new Uint8Array(data), order)
+  ipcMain.handle('pdf:reorder', async (_e, data: unknown, order: unknown) => {
+    const pdf = assertPdfBytes(data)
+    const out = await reorderPages(new Uint8Array(pdf), assertOrder(order))
     return out.buffer.slice(out.byteOffset, out.byteOffset + out.byteLength)
   })
-  ipcMain.handle('pdf:extract', async (_e, data: ArrayBuffer, indexes: number[]) => {
-    const out = await extractPages(new Uint8Array(data), indexes)
+  ipcMain.handle('pdf:extract', async (_e, data: unknown, indexes: unknown) => {
+    const pdf = assertPdfBytes(data)
+    const out = await extractPages(new Uint8Array(pdf), assertPageIndexes(indexes))
     return out.buffer.slice(out.byteOffset, out.byteOffset + out.byteLength)
   })
-  ipcMain.handle(
-    'pdf:splitRanges',
-    async (_e, data: ArrayBuffer, ranges: Array<{ start: number; end: number }>) => {
-      const outs = await splitByRanges(new Uint8Array(data), ranges)
-      return outs.map((o) => o.buffer.slice(o.byteOffset, o.byteOffset + o.byteLength))
-    }
-  )
-  ipcMain.handle('pdf:splitEveryN', async (_e, data: ArrayBuffer, n: number) => {
-    const outs = await splitEveryN(new Uint8Array(data), n)
+  ipcMain.handle('pdf:splitRanges', async (_e, data: unknown, ranges: unknown) => {
+    const pdf = assertPdfBytes(data)
+    const outs = await splitByRanges(new Uint8Array(pdf), assertRanges(ranges))
     return outs.map((o) => o.buffer.slice(o.byteOffset, o.byteOffset + o.byteLength))
   })
-  ipcMain.handle('pdf:merge', async (_e, list: ArrayBuffer[]) => {
-    const out = await mergePdfs(list.map((d) => new Uint8Array(d)))
+  ipcMain.handle('pdf:splitEveryN', async (_e, data: unknown, n: unknown) => {
+    const pdf = assertPdfBytes(data)
+    const outs = await splitEveryN(new Uint8Array(pdf), assertPositiveInt(n, 'n'))
+    return outs.map((o) => o.buffer.slice(o.byteOffset, o.byteOffset + o.byteLength))
+  })
+  ipcMain.handle('pdf:merge', async (_e, list: unknown) => {
+    const out = await mergePdfs(assertPdfList(list).map((d) => new Uint8Array(d)))
     return out.buffer.slice(out.byteOffset, out.byteOffset + out.byteLength)
   })
-  ipcMain.handle(
-    'pdf:rotate',
-    async (_e, data: ArrayBuffer, indexes: number[], angle: 90 | 180 | 270) => {
-      const out = await rotatePages(new Uint8Array(data), indexes, angle)
-      return out.buffer.slice(out.byteOffset, out.byteOffset + out.byteLength)
-    }
-  )
-  ipcMain.handle('pdf:duplicate', async (_e, data: ArrayBuffer, pageIndex: number) => {
-    const out = await duplicatePage(new Uint8Array(data), pageIndex)
+  ipcMain.handle('pdf:rotate', async (_e, data: unknown, indexes: unknown, angle: unknown) => {
+    const pdf = assertPdfBytes(data)
+    const out = await rotatePages(new Uint8Array(pdf), assertPageIndexes(indexes), assertAngle(angle))
+    return out.buffer.slice(out.byteOffset, out.byteOffset + out.byteLength)
+  })
+  ipcMain.handle('pdf:duplicate', async (_e, data: unknown, pageIndex: unknown) => {
+    const pdf = assertPdfBytes(data)
+    const out = await duplicatePage(new Uint8Array(pdf), assertPageIndex(pageIndex))
     return out.buffer.slice(out.byteOffset, out.byteOffset + out.byteLength)
   })
   ipcMain.handle(
     'pdf:embedSignature',
+    async (_e, data: unknown, pageIndex: unknown, imageData: unknown, mime: unknown, rect: unknown) => {
+      const pdf = assertPdfBytes(data)
+      const img = assertImageBytes(imageData)
+      const out = await embedSignatureImage(
+        new Uint8Array(pdf),
+        assertPageIndex(pageIndex),
+        new Uint8Array(img),
+        assertMime(mime),
+        assertRect(rect)
+      )
+      return out.buffer.slice(out.byteOffset, out.byteOffset + out.byteLength)
+    }
+  )
+  ipcMain.handle(
+    'pdf:replacePageImage',
     async (
       _e,
-      data: ArrayBuffer,
-      pageIndex: number,
-      imageData: ArrayBuffer,
-      mime: 'png' | 'jpg',
-      rect: { x: number; y: number; width: number; height: number }
+      data: unknown,
+      pageIndex: unknown,
+      imageData: unknown,
+      mime: unknown,
+      pageWidth: unknown,
+      pageHeight: unknown
     ) => {
-      const out = await embedSignatureImage(
-        new Uint8Array(data),
-        pageIndex,
-        new Uint8Array(imageData),
-        mime,
-        rect
+      const pdf = assertPdfBytes(data)
+      const img = assertImageBytes(imageData)
+      const w = pageWidth
+      const h = pageHeight
+      if (typeof w !== 'number' || typeof h !== 'number' || !Number.isFinite(w) || !Number.isFinite(h)) {
+        throw new Error('Invalid page size')
+      }
+      if (w <= 0 || h <= 0 || w > 20000 || h > 20000) throw new Error('Invalid page size')
+      const out = await replacePageWithImage(
+        new Uint8Array(pdf),
+        assertPageIndex(pageIndex),
+        new Uint8Array(img),
+        assertMime(mime),
+        w,
+        h
       )
       return out.buffer.slice(out.byteOffset, out.byteOffset + out.byteLength)
     }

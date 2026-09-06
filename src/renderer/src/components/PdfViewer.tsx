@@ -130,6 +130,15 @@ export default function PdfViewer({
 
     return () => {
       cancelled = true
+      const cur = pdfRef.current
+      pdfRef.current = null
+      if (cur) {
+        try {
+          cur.destroy()
+        } catch {
+          /* ignore */
+        }
+      }
     }
   }, [doc.data, doc.zoom, doc.id, updateDoc])
 
@@ -208,8 +217,6 @@ export default function PdfViewer({
   useEffect(() => {
     return () => {
       clearFindHighlights()
-      pdfRef.current?.destroy()
-      pdfRef.current = null
     }
   }, [])
 

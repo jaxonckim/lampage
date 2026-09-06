@@ -48,8 +48,19 @@ export default function RightSidebar({
       return
     }
     let cancelled = false
+    let pdfProxy: Awaited<ReturnType<typeof loadPdf>> | null = null
     ;(async () => {
       const pdf = await loadPdf(doc.data)
+      pdfProxy = pdf
+      if (cancelled) {
+        try {
+          pdf.destroy()
+        } catch {
+          /* ignore */
+        }
+        pdfProxy = null
+        return
+      }
       try {
         const o = await getOutline(pdf)
         if (cancelled) return
@@ -58,11 +69,26 @@ export default function RightSidebar({
           updateDoc(doc.id, { pageCount: pdf.numPages })
         }
       } finally {
-        pdf.destroy()
+        if (pdfProxy === pdf) {
+          try {
+            pdf.destroy()
+          } catch {
+            /* ignore */
+          }
+          pdfProxy = null
+        }
       }
     })()
     return () => {
       cancelled = true
+      if (pdfProxy) {
+        try {
+          pdfProxy.destroy()
+        } catch {
+          /* ignore */
+        }
+        pdfProxy = null
+      }
     }
   }, [doc?.id, doc?.data])
 
@@ -73,12 +99,19 @@ export default function RightSidebar({
 
     const gen = ++renderGen.current
     let cancelled = false
+    let pdfProxy: Awaited<ReturnType<typeof loadPdf>> | null = null
 
     ;(async () => {
       root.replaceChildren()
       const pdf = await loadPdf(doc.data)
+      pdfProxy = pdf
       if (cancelled || gen !== renderGen.current) {
-        pdf.destroy()
+        try {
+          pdf.destroy()
+        } catch {
+          /* ignore */
+        }
+        pdfProxy = null
         return
       }
       try {
@@ -155,12 +188,27 @@ export default function RightSidebar({
           })
         }
       } finally {
-        pdf.destroy()
+        if (pdfProxy === pdf) {
+          try {
+            pdf.destroy()
+          } catch {
+            /* ignore */
+          }
+          pdfProxy = null
+        }
       }
     })()
 
     return () => {
       cancelled = true
+      if (pdfProxy) {
+        try {
+          pdfProxy.destroy()
+        } catch {
+          /* ignore */
+        }
+        pdfProxy = null
+      }
     }
   }, [doc?.id, doc?.data, setStatus, updateDoc])
 

@@ -9,9 +9,9 @@ import MarkdownView from './components/MarkdownView'
 import SelectionCopyButton from './components/SelectionCopyButton'
 import PageManageModal from './components/PageManageModal'
 import SignatureModal from './components/SignatureModal'
+import SignaturePlacer from './components/SignaturePlacer'
 import { useAppStore, syncMdTextToData } from './stores/appStore'
 import type { TocItem } from './types/docs'
-import { encodeText } from './utils/id'
 import { suppressPageSync } from './utils/pageSync'
 
 export default function App(): JSX.Element {
@@ -358,9 +358,8 @@ export default function App(): JSX.Element {
 
       <footer className="status-bar">{status}</footer>
       <PageManageModal doc={doc} onPdfMutated={onPdfMutated} />
-      <SignatureModal doc={doc} onPdfMutated={onPdfMutated} />
+      <SignatureModal doc={doc} />
+      <SignaturePlacer onPdfMutated={onPdfMutated} />
     </div>
   )
 }
-
-void encodeText

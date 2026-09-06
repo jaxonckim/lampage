@@ -136,13 +136,7 @@ export default function PageManageModal({ doc, onPdfMutated }: Props): JSX.Eleme
         existing.delete(slot.id)
       })
       root.replaceChildren(frag)
-      // Drop bitmaps for removed slots
-      existing.forEach((_, id) => {
-        const gone = slotsRef.current.find((s) => s.id === id)
-        if (!gone) {
-          /* already removed from slots */
-        }
-      })
+      // Removed slots are already absent from slotsRef; bitmaps GC'd with slot drop / releaseSlots.
     },
     []
   )

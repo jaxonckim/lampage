@@ -2,7 +2,12 @@ import { resolve } from 'path'
 import { defineConfig, externalizeDepsPlugin } from 'electron-vite'
 import react from '@vitejs/plugin-react'
 
-export default defineConfig({
+const DEV_CSP =
+  "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; worker-src 'self' blob:; connect-src 'self' blob: ws: wss: http: https:;"
+const PROD_CSP =
+  "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; worker-src 'self' blob:; connect-src 'self' blob:;"
+
+export default defineConfig(({ command }) => ({
   main: {
     plugins: [externalizeDepsPlugin()],
     build: {
@@ -24,16 +29,25 @@ export default defineConfig({
     }
   },
   renderer: {
-    server: {
-      // Allow Cloudflare quick tunnels for remote UI preview
-      allowedHosts: true
-    },
+    // `server` applies only to vite dev / preview — never to packaged Electron builds.
+    // allowedHosts: true keeps Cloudflare quick tunnels working in dev.
+    server: command === 'serve' ? { allowedHosts: true } : undefined,
     resolve: {
       alias: {
-        '@renderer': resolve('src/renderer/src')
+        '@renderer': resolve('src/renderer/src'),
+        '@shared': resolve('src/shared')
       }
     },
-    plugins: [react()],
+    plugins: [
+      react(),
+      {
+        name: 'lampage-csp',
+        transformIndexHtml(html) {
+          const csp = command === 'serve' ? DEV_CSP : PROD_CSP
+          return html.replace(/__LAMPAGE_CSP__/g, csp)
+        }
+      }
+    ],
     build: {
       rollupOptions: {
         input: {
@@ -45,4 +59,4 @@ export default defineConfig({
       include: ['pdfjs-dist']
     }
   }
-})
+}))

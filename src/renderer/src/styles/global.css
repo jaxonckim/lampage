@@ -843,3 +843,68 @@ input[type="text"]:focus, .modal-card input:focus {
   margin-top: 4px;
   border-top: 1px solid var(--border-soft);
 }
+
+
+/* ===== Signature placer overlay ===== */
+.sig-placer {
+  box-sizing: border-box;
+  border: 1.5px dashed var(--accent);
+  background: rgba(255, 255, 255, 0.15);
+  box-shadow: 0 0 0 1px rgba(20, 61, 46, 0.2);
+  touch-action: none;
+  user-select: none;
+}
+.sig-placer-img {
+  width: 100%;
+  height: 100%;
+  object-fit: fill;
+  display: block;
+  pointer-events: auto;
+  cursor: move;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+.sig-placer-handle {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  background: #fff;
+  border: 1.5px solid var(--accent);
+  border-radius: 2px;
+  box-sizing: border-box;
+  z-index: 2;
+  touch-action: none;
+}
+.sig-placer-handle-nw { left: -5px; top: -5px; cursor: nwse-resize; }
+.sig-placer-handle-ne { right: -5px; top: -5px; cursor: nesw-resize; }
+.sig-placer-handle-sw { left: -5px; bottom: -5px; cursor: nesw-resize; }
+.sig-placer-handle-se { right: -5px; bottom: -5px; cursor: nwse-resize; }
+.sig-placer-handle-n { left: 50%; top: -5px; margin-left: -5px; cursor: ns-resize; }
+.sig-placer-handle-s { left: 50%; bottom: -5px; margin-left: -5px; cursor: ns-resize; }
+.sig-placer-handle-w { left: -5px; top: 50%; margin-top: -5px; cursor: ew-resize; }
+.sig-placer-handle-e { right: -5px; top: 50%; margin-top: -5px; cursor: ew-resize; }
+
+.sig-placer-toolbar {
+  position: absolute;
+  left: 50%;
+  bottom: 18px;
+  transform: translateX(-50%);
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  background: var(--panel-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-md);
+  max-width: calc(100% - 24px);
+}
+.sig-placer-hint {
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 360px;
+}

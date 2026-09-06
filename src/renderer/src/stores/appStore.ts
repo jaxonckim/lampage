@@ -15,6 +15,21 @@ function readBool(key: string, fallback: boolean): boolean {
   }
 }
 
+/** In-progress signature placement (PDF page units / points). */
+export type SignaturePlacement = {
+  docId: string
+  pageIndex: number
+  imageData: ArrayBuffer
+  mime: 'png' | 'jpg'
+  objectUrl: string
+  /** Left edge in PDF points (origin top-left for overlay math). */
+  xPt: number
+  /** Top edge in PDF points (from page top). */
+  yTopPt: number
+  widthPt: number
+  heightPt: number
+}
+
 interface AppState {
   docs: OpenDoc[]
   activeId: string | null
@@ -30,6 +45,7 @@ interface AppState {
   status: string
   pageManageOpen: boolean
   signatureOpen: boolean
+  signaturePlacement: SignaturePlacement | null
 
   setLeftWidth: (w: number) => void
   setRightWidth: (w: number) => void
@@ -45,6 +61,8 @@ interface AppState {
   setStatus: (s: string) => void
   setPageManageOpen: (v: boolean) => void
   setSignatureOpen: (v: boolean) => void
+  setSignaturePlacement: (p: SignaturePlacement | null) => void
+  patchSignaturePlacement: (patch: Partial<SignaturePlacement>) => void
   setActive: (id: string) => void
   closeDoc: (id: string) => void
   updateDoc: (id: string, patch: Partial<OpenDoc>) => void
@@ -69,6 +87,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   status: '就绪',
   pageManageOpen: false,
   signatureOpen: false,
+  signaturePlacement: null,
 
   setLeftWidth: (w) => set({ leftWidth: Math.min(480, Math.max(160, w)) }),
   setRightWidth: (w) => set({ rightWidth: Math.min(480, Math.max(180, w)) }),
@@ -102,6 +121,22 @@ export const useAppStore = create<AppState>((set, get) => ({
   setStatus: (s) => set({ status: s }),
   setPageManageOpen: (v) => set({ pageManageOpen: v }),
   setSignatureOpen: (v) => set({ signatureOpen: v }),
+  setSignaturePlacement: (p) => {
+    const prev = get().signaturePlacement
+    if (prev?.objectUrl && prev.objectUrl !== p?.objectUrl) {
+      try {
+        URL.revokeObjectURL(prev.objectUrl)
+      } catch {
+        /* ignore */
+      }
+    }
+    set({ signaturePlacement: p })
+  },
+  patchSignaturePlacement: (patch) => {
+    const cur = get().signaturePlacement
+    if (!cur) return
+    set({ signaturePlacement: { ...cur, ...patch } })
+  },
   setActive: (id) => {
     const doc = get().docs.find((d) => d.id === id)
     set({
@@ -111,9 +146,26 @@ export const useAppStore = create<AppState>((set, get) => ({
     })
   },
   closeDoc: (id) => {
+    const target = get().docs.find((d) => d.id === id)
+    if (target?.dirty) {
+      const ok = window.confirm(`「${target.name}」有未保存的更改，确定关闭？`)
+      if (!ok) return
+    }
+    const placement = get().signaturePlacement
+    if (placement?.docId === id) {
+      try {
+        URL.revokeObjectURL(placement.objectUrl)
+      } catch {
+        /* ignore */
+      }
+    }
     const docs = get().docs.filter((d) => d.id !== id)
     const activeId = get().activeId === id ? docs[0]?.id ?? null : get().activeId
-    set({ docs, activeId })
+    set({
+      docs,
+      activeId,
+      signaturePlacement: placement?.docId === id ? null : placement
+    })
   },
   updateDoc: (id, patch) =>
     set({

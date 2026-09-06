@@ -137,3 +137,35 @@ export async function embedSignatureImage(
   })
   return doc.save()
 }
+
+/**
+ * Replace one page with a full-page raster image (PNG/JPG).
+ * Tradeoff: that page becomes a flat bitmap — text/vector content is no longer selectable or extractable.
+ */
+export async function replacePageWithImage(
+  pdfBytes: Uint8Array,
+  pageIndex: number,
+  imageBytes: Uint8Array,
+  mime: 'png' | 'jpg',
+  pageWidth: number,
+  pageHeight: number
+): Promise<Uint8Array> {
+  const src = await PDFDocument.load(pdfBytes)
+  const count = src.getPageCount()
+  if (pageIndex < 0 || pageIndex >= count) {
+    throw new Error('Page index out of range')
+  }
+  const out = await PDFDocument.create()
+  for (let i = 0; i < count; i++) {
+    if (i === pageIndex) {
+      const page = out.addPage([pageWidth, pageHeight])
+      const image =
+        mime === 'png' ? await out.embedPng(imageBytes) : await out.embedJpg(imageBytes)
+      page.drawImage(image, { x: 0, y: 0, width: pageWidth, height: pageHeight })
+    } else {
+      const [copied] = await out.copyPages(src, [i])
+      out.addPage(copied)
+    }
+  }
+  return out.save()
+}
