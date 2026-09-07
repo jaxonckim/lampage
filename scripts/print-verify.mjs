@@ -92,15 +92,20 @@ if (!/print:document/.test(preloadSrc)) {
   pass('preload-channel')
 }
 
-// Electron native PDF path writes temp .pdf and loads file:// (not HTML raster)
+// Electron user path must use HTML print surface (never Chromium PDF plugin / #view=Fit)
 if (
-  /tempPath\('pdf'\)|tempPath\("pdf"\)/.test(printMod) &&
+  /buildPdfPrintHarnessHtml|html-surface/.test(printMod) &&
   /printPdfDocument/.test(printMod) &&
-  /writeFile\(filePath,\s*buf\)/.test(printMod)
+  !/#view=Fit/.test(printMod)
 ) {
-  pass('electron-native-pdf-path', 'printPdfDocument writes temp PDF file')
+  pass('electron-html-print-surface', 'printPdfDocument uses pdf.js HTML harness, not PDF plugin')
 } else {
-  fail('electron-native-pdf-path', 'expected temp PDF write in printDocument')
+  fail('electron-html-print-surface', 'expected HTML harness / no file:// PDF plugin path')
+}
+if (/method:\s*'html-surface'/.test(printMod)) {
+  pass('electron-print-method-html-surface')
+} else {
+  fail('electron-print-method-html-surface', 'lastPrintJob.method should be html-surface')
 }
 
 // Browser path must prefer blob application/pdf iframe before HTML raster

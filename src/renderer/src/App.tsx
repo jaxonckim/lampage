@@ -96,7 +96,7 @@ export default function App(): JSX.Element {
     try {
       let ok = false
       if (doc.kind === 'pdf') {
-        // Electron: native full-PDF print in a dedicated window (all pages, no chrome).
+        // Electron: HTML print surface (pdf.js) → system print dialog (no PDF plugin chrome).
         // Browser shim: multi-page HTML surfaces / blob PDF (see browserApi).
         ok = await window.api.print({ kind: 'pdf', data: doc.data })
       } else {

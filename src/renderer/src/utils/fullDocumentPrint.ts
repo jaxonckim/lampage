@@ -77,7 +77,9 @@ export const PDF_PRINT_PAGE_CSS = `
   html, body { margin: 0; padding: 0; background: #fff; }
   .pdf-print-root { margin: 0; padding: 0; }
   .pdf-print-page {
-    display: block;
+    display: flex;
+    align-items: center;
+    justify-content: center;
     box-sizing: border-box;
     width: 100%;
     max-width: 100%;
@@ -107,7 +109,32 @@ export const PDF_PRINT_PAGE_CSS = `
   }
 `
 
-function wrapPdfPagesHtml(pagesHtml: string, pageCount: number, title: string): string {
+function wrapPdfPagesHtml(
+  pagesHtml: string,
+  pageCount: number,
+  title: string,
+  pageWidthPt?: number,
+  pageHeightPt?: number
+): string {
+  const sized =
+    pageWidthPt && pageHeightPt
+      ? `
+  @page { size: ${pageWidthPt}pt ${pageHeightPt}pt; margin: 0; }
+  .pdf-print-page {
+    width: ${pageWidthPt}pt;
+    height: ${pageHeightPt}pt;
+    max-width: ${pageWidthPt}pt;
+    max-height: ${pageHeightPt}pt;
+  }
+  .pdf-print-page img, .pdf-print-page canvas {
+    width: 100%;
+    height: 100%;
+    max-width: 100%;
+    max-height: 100%;
+    object-fit: contain;
+  }
+`
+      : ''
   return `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -116,10 +143,11 @@ function wrapPdfPagesHtml(pagesHtml: string, pageCount: number, title: string): 
 <title>${escapeHtml(title)}</title>
 <style>
 ${PDF_PRINT_PAGE_CSS}
+${sized}
 </style>
 </head>
 <body>
-<div class="pdf-print-root" data-page-count="${pageCount}">
+<div class="pdf-print-root" data-page-count="${pageCount}" data-page-width="${pageWidthPt ?? ''}" data-page-height="${pageHeightPt ?? ''}">
 ${pagesHtml}
 </div>
 </body>
@@ -145,8 +173,15 @@ export async function buildPdfPrintHtml(
     }
 
     const parts: string[] = []
+    let pageWidthPt = 595
+    let pageHeightPt = 842
     for (let i = 1; i <= pageCount; i++) {
       const page = await pdf.getPage(i)
+      if (i === 1) {
+        const base = page.getViewport({ scale: 1 })
+        pageWidthPt = base.width
+        pageHeightPt = base.height
+      }
       const viewport = page.getViewport({ scale: PRINT_SCALE })
       const canvas = document.createElement('canvas')
       const ctx = canvas.getContext('2d')
@@ -163,7 +198,7 @@ export async function buildPdfPrintHtml(
       )
     }
 
-    const html = wrapPdfPagesHtml(parts.join('\n'), pageCount, title)
+    const html = wrapPdfPagesHtml(parts.join('\n'), pageCount, title, pageWidthPt, pageHeightPt)
     return { pageCount, html, hasPageSurfaces: true, method: 'html-raster' }
   } finally {
     await pdf.destroy()

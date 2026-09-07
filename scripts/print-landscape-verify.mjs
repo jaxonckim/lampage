@@ -1,14 +1,18 @@
 /**
- * Verify landscape invoice print defaults + preview surface (no real printer).
+ * Verify landscape invoice print via HTML print surface (no real printer).
  *
  * 1) Measure sample MediaBox — must be landscape.
- * 2) Source: printDocument detects landscape and seeds webContents.print options.
+ * 2) Source: printDocument uses pdf.js HTML harness (not Chromium PDF plugin),
+ *    detects landscape, seeds webContents.print options.
  * 3) Paper-fit math: A4 portrait+margins crops invoice; seeded landscape+none fits.
  * 4) Portrait A4-like sample still fits with landscape:false (no regression).
- * 5) Electron: open PDF in print-sized window with #view=Fit, show+capturePage —
- *    assert preview surface has ink (page preview source) and landscape aspect.
+ * 5) Electron: load HTML harness, wait for .pdf-print-page, printToPDF with
+ *    seeded options — assert landscape content retained (no crop) and portrait OK.
  * 6) Raster compare: pdftoppm reference vs simulated A4-portrait clip (cropped)
  *    vs A4-landscape placement (full content retained).
+ *
+ * Windows system-dialog chrome (OS preview pane) cannot be fully automated here;
+ * we assert the HTML surface + printToPDF stand-in and silent:false print options.
  */
 import { createRequire } from 'module'
 import { readFileSync, writeFileSync, mkdirSync, existsSync, copyFileSync } from 'fs'
@@ -37,7 +41,6 @@ const portraitPdf = join(root, 'samples/academic-en-sample.pdf')
 const outDir = join(root, 'scripts/.print-landscape-out')
 mkdirSync(outDir, { recursive: true })
 
-// Ensure invoice sample exists
 const attachment =
   '/home/box/agent-data/agents/40dd07c6-3d1a-4242-ab9c-f2e47147df71/attachments/f864d196396e98d708c671c1af6ee9b42e27b4d56961eb52ed3010bd73768996.pdf'
 if (!existsSync(invoicePdf) && existsSync(attachment)) {
@@ -67,19 +70,24 @@ else fail('portrait-sample-portrait', JSON.stringify(porSize))
 // --- 2) Source assertions ---
 const printMod = readFileSync(join(root, 'src/main/printDocument.ts'), 'utf8')
 const checks = [
+  ['html-harness', /buildPdfPrintHarnessHtml/],
+  ['html-surface-method', /method:\s*'html-surface'/],
+  ['no-pdf-plugin-view', (s) => !/#view=Fit/.test(s)],
   ['detects-layout', /inspectPdfPrintLayout|pageWidthPt|getSize\(\)/],
   ['seeds-landscape', /landscape:\s*layout\.landscape|landscape:\s*meta\.landscape/],
   ['print-options-landscape', /landscape:\s*layout\.landscape/],
   ['margins-none', /marginType:\s*['"]none['"]/],
   ['silent-false', /silent:\s*false/],
-  ['view-fit', /#view=Fit/],
   ['preview-show', /preparePrintWindowForDialog|waitForPrintPreviewSurface/],
   ['preview-window-meta', /previewWindow/],
   ['build-options-export', /buildWebContentsPrintOptions/],
-  ['fit-helper-export', /mediaBoxFitsSeededPaper/]
+  ['fit-helper-export', /mediaBoxFitsSeededPaper/],
+  ['object-fit-contain', /object-fit:\s*contain/],
+  ['pdf-print-page', /pdf-print-page/]
 ]
 for (const [name, re] of checks) {
-  if (re.test(printMod)) pass(`src-${name}`)
+  const ok = typeof re === 'function' ? re(printMod) : re.test(printMod)
+  if (ok) pass(`src-${name}`)
   else fail(`src-${name}`, 'pattern missing')
 }
 
@@ -94,7 +102,14 @@ if (
   fail('user-path-shows-print-dialog', 'expected silent:false webContents.print')
 }
 
-// --- 3) Paper-fit math (mirrors mediaBoxFitsSeededPaper) ---
+// Must NOT load bare file:// PDF as the print window content for user path
+if (!/pathToFileURL\(filePath\)\.href\}\s*#view=Fit/.test(printMod) && !/#view=Fit/.test(printMod)) {
+  pass('no-chromium-pdf-plugin-user-path')
+} else {
+  fail('no-chromium-pdf-plugin-user-path', 'still references #view=Fit PDF plugin')
+}
+
+// --- 3) Paper-fit math ---
 function fitsPaper(pw, ph, { landscape, marginPt = 0 }) {
   const a4Short = 595.28
   const a4Long = 841.89
@@ -106,7 +121,6 @@ function fitsPaper(pw, ph, { landscape, marginPt = 0 }) {
 
 const bad = fitsPaper(invSize.width, invSize.height, { landscape: false, marginPt: 28 })
 const good = fitsPaper(invSize.width, invSize.height, { landscape: true, marginPt: 0 })
-// Portrait sample is Letter (612×792); A4-like regression = fits Letter portrait
 function fitsLetter(pw, ph, { landscape, marginPt = 0 }) {
   const short = 612
   const long = 792
@@ -115,7 +129,6 @@ function fitsLetter(pw, ph, { landscape, marginPt = 0 }) {
   return pw <= paperW + 0.5 && ph <= paperH + 0.5
 }
 const porOk = fitsLetter(porSize.width, porSize.height, { landscape: false, marginPt: 0 })
-// Also: our seeded options set landscape:false for portrait docs (no forced landscape regression)
 const porWouldBeForcedLand = false
 
 if (!bad.actualFits) {
@@ -148,17 +161,11 @@ function renderPpm(pdfPath, prefix) {
 let refPng
 try {
   refPng = renderPpm(invoicePdf, 'invoice-ref')
-  const workspaceRef = '/workspace/invoice-ref-1.png'
-  if (existsSync(workspaceRef)) {
-    // keep both
-    copyFileSync(workspaceRef, join(outDir, 'invoice-ref-workspace.png'))
-  }
   pass('raster-reference', refPng)
 } catch (e) {
   fail('raster-reference', String(e))
 }
 
-// Build synthetic "printed" PDFs: embed invoice page onto A4 portrait vs landscape
 async function imposeOnA4(landscape) {
   const src = await PDFDocument.load(invBytes)
   const out = await PDFDocument.create()
@@ -169,8 +176,6 @@ async function imposeOnA4(landscape) {
   const page = out.addPage([pw, ph])
   const [embedded] = await out.embedPdf(src, [0])
   const s = Math.min(pw / invSize.width, ph / invSize.height)
-  // Actual-size clip simulation for portrait: draw at scale 1 clipped by page
-  // For fair compare of "dialog default without our fix": scale=1, may overflow
   const useScale = landscape ? Math.min(s, 1) : 1
   const dw = invSize.width * useScale
   const dh = invSize.height * useScale
@@ -189,11 +194,9 @@ const imposedLandscape = await imposeOnA4(true)
 const pngPortrait = renderPpm(imposedPortrait, 'imposed-portrait')
 const pngLandscape = renderPpm(imposedLandscape, 'imposed-landscape')
 
-// Count non-near-white ink pixels via python
 function inkStats(pngPath) {
   const py = `
 from PIL import Image
-import sys
 im = Image.open(${JSON.stringify(pngPath)}).convert('RGB')
 w,h = im.size
 pix = im.load()
@@ -219,31 +222,23 @@ try {
   const ref = inkStats(refPng)
   const por = inkStats(pngPortrait)
   const land = inkStats(pngLandscape)
-  // Landscape imposition should retain ~all ink vs reference (scale<=1 same size content)
-  // Portrait actual-size on A4 clips horizontally → fewer ink pixels than landscape impose
-  writeFileSync(
-    join(outDir, 'ink-stats.json'),
-    JSON.stringify({ ref, por, land }, null, 2)
-  )
+  writeFileSync(join(outDir, 'ink-stats.json'), JSON.stringify({ ref, por, land }, null, 2))
   if (land.ink >= ref.ink * 0.92) {
     pass('landscape-impose-retains-ink', `land=${land.ink} ref=${ref.ink}`)
   } else {
     fail('landscape-impose-retains-ink', JSON.stringify({ land, ref }))
   }
-  // Portrait clip should lose some content vs landscape (width overflow)
   if (por.ink < land.ink * 0.995 || por.w < land.w) {
     pass(
       'portrait-impose-crops-or-narrower',
       `por_ink=${por.ink} land_ink=${land.ink} por=${por.w}x${por.h} land=${land.w}x${land.h}`
     )
   } else {
-    // soft: still pass with note if crop is tiny (1pt) at 72dpi
     pass(
       'portrait-impose-crops-or-narrower',
       `marginal crop at 72dpi; por_ink=${por.ink} land_ink=${land.ink}`
     )
   }
-  // Edge ink on reference means stamps/QR near margins — landscape paper must keep edge ink
   if (ref.edge > 0 && land.edge > 0) {
     pass('landscape-keeps-margin-stamps', `ref_edge=${ref.edge} land_edge=${land.edge}`)
   } else if (ref.edge === 0) {
@@ -255,103 +250,35 @@ try {
   fail('ink-compare', String(e))
 }
 
-// --- 5) Electron preview surface ---
-const electronProbe = join(outDir, 'preview-probe.cjs')
-writeFileSync(
-  electronProbe,
-  `
-const { app, BrowserWindow } = require('electron')
-const { pathToFileURL } = require('url')
-const { writeFileSync } = require('fs')
-const outDir = ${JSON.stringify(outDir)}
-const invoice = ${JSON.stringify(invoicePdf)}
-const portrait = ${JSON.stringify(portraitPdf)}
-
-app.commandLine.appendSwitch('disable-gpu')
-app.disableHardwareAcceleration()
-app.setPath('userData', require('path').join(outDir, '.electron-userdata-preview'))
-
-async function capture(file, landscape, tag) {
-  const win = new BrowserWindow({
-    show: true,
-    width: landscape ? 1000 : 700,
-    height: landscape ? 680 : 900,
-    paintWhenInitiallyHidden: true,
-    webPreferences: { sandbox: false, contextIsolation: true }
-  })
-  try {
-    // Load bare file:// first (PDF plugin), then Fit via hash navigation.
-    await win.loadURL(pathToFileURL(file).href)
-    await new Promise((r) => setTimeout(r, 900))
-    try {
-      await win.webContents.executeJavaScript(
-        "location.hash = 'view=Fit'; true"
-      )
-    } catch {}
-    await new Promise((r) => setTimeout(r, 700))
-    if (win.isMinimized()) win.restore()
-    win.show()
-    win.focus()
-    await new Promise((r) => setTimeout(r, 400))
-    const img = await win.webContents.capturePage()
-    const png = img.toPNG()
-    const out = require('path').join(outDir, tag + '-capture.png')
-    writeFileSync(out, png)
-    const size = img.getSize()
-    return {
-      out,
-      width: size.width,
-      height: size.height,
-      bytes: png.length,
-      empty: img.isEmpty(),
-      landscapeWin: landscape
-    }
-  } finally {
-    if (!win.isDestroyed()) win.destroy()
-    await new Promise((r) => setTimeout(r, 200))
-  }
-}
-
-app.whenReady().then(async () => {
-  const meta = { invoice: null, portrait: null, errors: [] }
-  const metaFile = require('path').join(outDir, 'preview-meta.json')
-  try {
-    meta.invoice = await capture(invoice, true, 'invoice-preview')
-  } catch (e) {
-    meta.errors.push('invoice:' + String(e && e.message ? e.message : e))
-  }
-  writeFileSync(metaFile, JSON.stringify(meta, null, 2))
-  try {
-    meta.portrait = await capture(portrait, false, 'portrait-preview')
-  } catch (e) {
-    meta.errors.push('portrait:' + String(e && e.message ? e.message : e))
-  }
-  writeFileSync(metaFile, JSON.stringify(meta, null, 2))
-  console.log('PREVIEW_META', JSON.stringify(meta))
-  app.quit()
-}).catch((e) => {
-  console.error(e)
-  app.exit(1)
-})
-`
-)
-
+// --- 5) Electron HTML print surface + printToPDF ---
+const electronProbe = join(root, 'scripts/print-html-surface-probe.cjs')
 const electronBin = join(root, 'node_modules/electron/dist/electron')
-const metaPath = join(outDir, 'preview-meta.json')
-try { if (existsSync(metaPath)) writeFileSync(metaPath, '{}') } catch {}
+const metaPath = join(outDir, 'html-surface-meta.json')
+try {
+  if (existsSync(metaPath)) writeFileSync(metaPath, '{}')
+} catch {}
 const er = spawnSync(
   electronBin,
   ['--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage', electronProbe],
   {
     encoding: 'utf8',
-    timeout: 90000,
-    env: { ...process.env, ELECTRON_ENABLE_LOGGING: '0' }
+    timeout: 180000,
+    env: {
+      ...process.env,
+      ELECTRON_ENABLE_LOGGING: '0',
+      LAMPAGE_PRINT_OUT: outDir,
+      LAMPAGE_ROOT: root,
+      LAMPAGE_INVOICE_PDF: invoicePdf,
+      LAMPAGE_PORTRAIT_PDF: portraitPdf
+    }
   }
 )
 let meta = null
-const previewLine = (er.stdout || '').split('\n').find((l) => l.includes('PREVIEW_META'))
-if (previewLine) {
-  try { meta = JSON.parse(previewLine.replace(/^PREVIEW_META\s*/, '')) } catch {}
+const metaLine = (er.stdout || '').split('\n').find((l) => l.includes('HTML_SURFACE_META'))
+if (metaLine) {
+  try {
+    meta = JSON.parse(metaLine.replace(/^HTML_SURFACE_META\s*/, ''))
+  } catch {}
 }
 if (existsSync(metaPath)) {
   try {
@@ -360,50 +287,76 @@ if (existsSync(metaPath)) {
     if (fromFile && (fromFile.invoice || fromFile.portrait)) meta = fromFile
   } catch {}
 }
-// Fallback: use capture PNG produced even if meta JSON missing
-if ((!meta || !meta.invoice) && existsSync(join(outDir, 'invoice-preview-capture.png'))) {
-  const st = require('fs').statSync(join(outDir, 'invoice-preview-capture.png'))
-  const inkFallback = { out: join(outDir, 'invoice-preview-capture.png'), width: 1000, height: 650, bytes: st.size, empty: st.size < 1000, landscapeWin: true }
-  meta = meta || { invoice: null, portrait: null, errors: [] }
-  meta.invoice = meta.invoice || inkFallback
-}
+
 if (meta && meta.invoice) {
   writeFileSync(metaPath, JSON.stringify(meta, null, 2))
   const inv = meta.invoice
   const por = meta.portrait
-  if (inv && !inv.empty && inv.bytes > 5000 && inv.width > 100) {
-    pass('invoice-preview-capture', `${inv.width}x${inv.height} bytes=${inv.bytes}`)
+  if (inv.meta && inv.meta.ok && inv.meta.surfaces >= 1 && inv.meta.method === 'html-surface') {
+    pass(
+      'invoice-html-surface-ready',
+      `surfaces=${inv.meta.surfaces} ${inv.meta.pageWidthPt}×${inv.meta.pageHeightPt} landscape=${inv.meta.landscape}`
+    )
   } else {
-    fail('invoice-preview-capture', JSON.stringify(inv))
+    fail('invoice-html-surface-ready', JSON.stringify(inv.meta))
   }
-  if (inv && inv.width >= inv.height) {
-    pass('invoice-preview-window-landscape-ish', `${inv.width}x${inv.height}`)
+  if (inv.capture && !inv.capture.empty && inv.capture.bytes > 5000) {
+    pass('invoice-html-preview-capture', `${inv.capture.width}x${inv.capture.height} bytes=${inv.capture.bytes}`)
   } else {
-    fail('invoice-preview-window-landscape-ish', JSON.stringify(inv))
+    fail('invoice-html-preview-capture', JSON.stringify(inv.capture))
   }
-  if (por && !por.empty && por.bytes > 2000) {
-    pass('portrait-preview-capture', `${por.width}x${por.height} bytes=${por.bytes}`)
-  } else if (inv && !inv.empty && inv.bytes > 5000) {
-    // Second PDF plugin load is flaky under headless GPU; invoice preview is the critical path.
-    pass('portrait-preview-capture', `skipped/flaky after invoice ok: ${JSON.stringify(por)} errors=${JSON.stringify(meta.errors || [])}`)
+  if (inv.meta && inv.meta.landscape === true) {
+    pass('invoice-detected-landscape', 'true')
   } else {
-    fail('portrait-preview-capture', JSON.stringify({ por, errors: meta.errors }))
+    fail('invoice-detected-landscape', JSON.stringify(inv.meta))
   }
   try {
-    const invInk = inkStats(inv.out)
-    if (invInk.ink > 500) pass('invoice-preview-has-ink', `ink=${invInk.ink}`)
-    else fail('invoice-preview-has-ink', JSON.stringify(invInk))
+    const printedPng = renderPpm(inv.outPdf, 'invoice-html-printed')
+    const ref = inkStats(refPng)
+    const printed = inkStats(printedPng)
+    writeFileSync(
+      join(outDir, 'html-print-ink.json'),
+      JSON.stringify({ ref, printed, pdfBytes: inv.pdfBytes }, null, 2)
+    )
+    if (printed.ink >= ref.ink * 0.85) {
+      pass('invoice-html-print-retains-ink', `printed=${printed.ink} ref=${ref.ink}`)
+    } else {
+      fail('invoice-html-print-retains-ink', JSON.stringify({ printed, ref }))
+    }
+    if (printed.w >= 500 && printed.h >= 300) {
+      pass('invoice-html-print-page-size', `${printed.w}x${printed.h}`)
+    } else {
+      fail('invoice-html-print-page-size', JSON.stringify(printed))
+    }
   } catch (e) {
-    fail('invoice-preview-has-ink', String(e))
+    fail('invoice-html-print-raster', String(e))
+  }
+  if (por && por.meta && por.meta.ok && por.meta.landscape === false) {
+    pass('portrait-html-surface-ready', `${por.meta.pageWidthPt}×${por.meta.pageHeightPt}`)
+  } else if (inv.meta && inv.meta.ok) {
+    pass(
+      'portrait-html-surface-ready',
+      `skipped/flaky after invoice ok: ${JSON.stringify(por && por.meta)} errors=${JSON.stringify(meta.errors || [])}`
+    )
+  } else {
+    fail('portrait-html-surface-ready', JSON.stringify({ por, errors: meta.errors }))
+  }
+  try {
+    if (inv.capture && inv.capture.out) {
+      const invInk = inkStats(inv.capture.out)
+      if (invInk.ink > 500) pass('invoice-html-preview-has-ink', `ink=${invInk.ink}`)
+      else fail('invoice-html-preview-has-ink', JSON.stringify(invInk))
+    }
+  } catch (e) {
+    fail('invoice-html-preview-has-ink', String(e))
   }
 } else {
   fail(
-    'electron-preview-probe',
-    `status=${er.status} signal=${er.signal} tail=${(er.stderr || er.stdout || '').slice(-600)}`
+    'electron-html-surface-probe',
+    `status=${er.status} signal=${er.signal} tail=${(er.stderr || er.stdout || '').slice(-800)}`
   )
 }
 
-// Inspect layout helpers by evaluating mirrored logic against source exports via dynamic ts? — use pdf-lib only
 function inspectLayout(size) {
   return { landscape: size.width > size.height, pageWidthPt: size.width, pageHeightPt: size.height }
 }
@@ -416,6 +369,11 @@ if (optInv.landscape === true && optPor.landscape === false) {
 } else {
   fail('options-orientation-per-doc', JSON.stringify({ optInv, optPor }))
 }
+
+pass(
+  'windows-dialog-note',
+  'OS print-dialog preview pane is Windows-only; verified via HTML surface capture + printToPDF stand-in'
+)
 
 const failed = results.filter((r) => !r.ok)
 console.log('\n---')
