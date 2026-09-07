@@ -10,6 +10,12 @@
  * (for the PDF viewer path). Never use opacity 0 / showInactive — that leaves
  * a ghost taskbar entry and the print dialog never surfaces properly.
  * MD/HTML conversion windows stay hidden; only the PDF print window is shown.
+ *
+ * Landscape invoices (MediaBox width > height, e.g. 596×397 pts): Chromium's
+ * print dialog defaults to A4 portrait + non-zero margins, which clips the
+ * page. Detect orientation via pdf-lib and pass landscape + marginType:none
+ * so the dialog defaults do not crop. Size/show the PDF viewer to Fit before
+ * print so the OS print settings UI can show a page preview.
  */
 import { BrowserWindow, app, screen } from 'electron'
 import { join } from 'path'
@@ -25,12 +31,25 @@ export type PrintPayload =
   /** Pre-built multi-page HTML (e.g. browser/pdf.js surfaces) */
   | { kind: 'html'; html: string; title?: string; pageCount?: number }
 
+export type PdfPrintLayout = {
+  pageCount: number
+  pageWidthPt: number
+  pageHeightPt: number
+  /** True when the first page's effective width > height (rotation-aware). */
+  landscape: boolean
+}
+
 /** Last job metadata for automated verification (tests / hooks). */
 export let lastPrintJob: {
   kind: 'pdf' | 'md' | 'html'
   pageCount: number
   usedMainWindow: false
   tempPath: string
+  landscape: boolean
+  pageWidthPt: number
+  pageHeightPt: number
+  printOptions: Electron.WebContentsPrintOptions
+  previewWindow: { width: number; height: number; shown: boolean }
 } | null = null
 
 const MAX_MD_HTML = 40 * 1024 * 1024
@@ -66,15 +85,81 @@ function getPrintWorkArea(parent?: BrowserWindow): Electron.Rectangle {
   return screen.getPrimaryDisplay().workArea
 }
 
-function createPrintWindow(): BrowserWindow {
+/**
+ * Inspect PDF MediaBox / rotation so print defaults match page aspect.
+ * Exported for verify scripts.
+ */
+export async function inspectPdfPrintLayout(
+  data: ArrayBuffer | Uint8Array | Buffer
+): Promise<PdfPrintLayout> {
+  const buf = toBuffer(data)
+  try {
+    const pdf = await PDFDocument.load(buf, { ignoreEncryption: true })
+    const pageCount = pdf.getPageCount()
+    if (pageCount < 1) {
+      return { pageCount: 0, pageWidthPt: 595, pageHeightPt: 842, landscape: false }
+    }
+    const page = pdf.getPage(0)
+    const { width, height } = page.getSize()
+    let angle = 0
+    try {
+      angle = page.getRotation().angle % 360
+    } catch {
+      angle = 0
+    }
+    if (angle < 0) angle += 360
+    const swapped = angle === 90 || angle === 270
+    const pageWidthPt = swapped ? height : width
+    const pageHeightPt = swapped ? width : height
+    return {
+      pageCount,
+      pageWidthPt,
+      pageHeightPt,
+      landscape: pageWidthPt > pageHeightPt
+    }
+  } catch {
+    return { pageCount: 1, pageWidthPt: 595, pageHeightPt: 842, landscape: false }
+  }
+}
+
+/** Build webContents.print options that avoid cropping landscape invoices. */
+export function buildWebContentsPrintOptions(
+  layout: Pick<PdfPrintLayout, 'landscape'>
+): Electron.WebContentsPrintOptions {
+  return {
+    silent: false,
+    printBackground: true,
+    // A4/Letter portrait + default margins crops width>height MediaBoxes
+    // (e.g. 596×397 Chinese e-invoices). Seed the system dialog in landscape
+    // with zero margins so the full page fits; user can still change paper.
+    landscape: layout.landscape,
+    margins: { marginType: 'none' },
+    pageSize: 'A4'
+  }
+}
+
+function createPrintWindow(opts?: { landscape?: boolean }): BrowserWindow {
   const parent = findPrintParent()
   const workArea = getPrintWorkArea(parent)
   const margin = 48
-  const width = Math.min(900, Math.max(320, workArea.width - margin))
-  const height = Math.min(
-    Math.min(900, Math.round(workArea.height * 0.8)),
-    Math.max(320, workArea.height - margin)
-  )
+  const landscape = !!opts?.landscape
+  // Landscape invoices need a wide viewer so Chromium's PDF plugin paints the
+  // full page (Fit) — that painted surface feeds the OS print dialog preview.
+  let width: number
+  let height: number
+  if (landscape) {
+    width = Math.min(1100, Math.max(480, workArea.width - margin))
+    height = Math.min(
+      Math.max(360, Math.round(width * (397 / 596))),
+      Math.max(360, workArea.height - margin)
+    )
+  } else {
+    width = Math.min(900, Math.max(320, workArea.width - margin))
+    height = Math.min(
+      Math.min(900, Math.round(workArea.height * 0.8)),
+      Math.max(320, workArea.height - margin)
+    )
+  }
   const x = Math.round(workArea.x + (workArea.width - width) / 2)
   const y = Math.round(workArea.y + (workArea.height - height) / 2)
   return new BrowserWindow({
@@ -94,12 +179,17 @@ function createPrintWindow(): BrowserWindow {
       sandbox: true,
       contextIsolation: true,
       nodeIntegration: false,
-      webSecurity: true
+      webSecurity: true,
+      // Required so capturePage / paint can observe the PDF plugin surface.
+      offscreen: false
     }
   })
 }
 
-function printWebContents(win: BrowserWindow): Promise<boolean> {
+function printWebContents(
+  win: BrowserWindow,
+  options: Electron.WebContentsPrintOptions
+): Promise<boolean> {
   return new Promise((resolve) => {
     let settled = false
     const finish = (ok: boolean): void => {
@@ -110,7 +200,7 @@ function printWebContents(win: BrowserWindow): Promise<boolean> {
     const timer = setTimeout(() => finish(false), PRINT_DIALOG_TIMEOUT_MS)
     // silent:false shows the system print dialog (user may cancel → false)
     try {
-      win.webContents.print({ silent: false, printBackground: true }, (success) => {
+      win.webContents.print(options, (success) => {
         clearTimeout(timer)
         finish(Boolean(success))
       })
@@ -209,6 +299,9 @@ function preparePrintWindowForDialog(win: BrowserWindow): void {
       win.setOpacity(1)
     }
     win.setTitle('打印')
+    if (win.isMinimized()) {
+      win.restore()
+    }
     win.show()
     win.focus()
     if (typeof win.moveTop === 'function') {
@@ -224,26 +317,88 @@ function preparePrintWindowForDialog(win: BrowserWindow): void {
   }
 }
 
+/**
+ * Wait until the PDF/HTML surface has painted after show so the OS print
+ * dialog preview pane is not empty.
+ */
+async function waitForPrintPreviewSurface(
+  win: BrowserWindow,
+  kind: 'pdf' | 'md' | 'html'
+): Promise<void> {
+  const budgetMs = kind === 'pdf' ? 2200 : 500
+  await new Promise<void>((resolve) => {
+    let settled = false
+    const done = (): void => {
+      if (settled) return
+      settled = true
+      resolve()
+    }
+    const timer = setTimeout(done, budgetMs)
+    try {
+      win.webContents.once('paint', () => {
+        clearTimeout(timer)
+        // One extra frame after paint so the PDF plugin finishes Fit layout.
+        setTimeout(done, 150)
+      })
+    } catch {
+      /* paint may be unavailable */
+    }
+  })
+  // Best-effort: ensure capturePage has real pixels (preview source).
+  try {
+    const img = await win.webContents.capturePage()
+    const { width, height } = img.getSize()
+    if (width < 32 || height < 32 || img.isEmpty()) {
+      await new Promise((r) => setTimeout(r, 500))
+    }
+  } catch {
+    /* capturePage can fail under some GPU/sandbox setups */
+  }
+}
+
 async function printTempFile(
   filePath: string,
-  meta: { kind: 'pdf' | 'md' | 'html'; pageCount: number }
+  meta: {
+    kind: 'pdf' | 'md' | 'html'
+    pageCount: number
+    landscape: boolean
+    pageWidthPt: number
+    pageHeightPt: number
+  }
 ): Promise<boolean> {
-  const win = createPrintWindow()
+  const printOptions = buildWebContentsPrintOptions({ landscape: meta.landscape })
+  const win = createPrintWindow({ landscape: meta.landscape })
+  const bounds = win.getBounds()
   lastPrintJob = {
     kind: meta.kind,
     pageCount: meta.pageCount,
     usedMainWindow: false,
-    tempPath: filePath
+    tempPath: filePath,
+    landscape: meta.landscape,
+    pageWidthPt: meta.pageWidthPt,
+    pageHeightPt: meta.pageHeightPt,
+    printOptions,
+    previewWindow: { width: bounds.width, height: bounds.height, shown: false }
   }
   try {
-    // loadURL resolves after did-finish-load
-    await win.loadURL(pathToFileURL(filePath).href)
+    // #view=Fit makes Chromium's PDF viewer paint the full page in the window,
+    // which is what Windows uses to populate the print settings preview pane.
+    const url =
+      meta.kind === 'pdf'
+        ? `${pathToFileURL(filePath).href}#view=Fit`
+        : pathToFileURL(filePath).href
+    await win.loadURL(url)
     // PDF viewer / layout settle (paintWhenInitiallyHidden paints before show)
-    await new Promise((r) => setTimeout(r, meta.kind === 'pdf' ? 600 : 300))
+    await new Promise((r) => setTimeout(r, meta.kind === 'pdf' ? 500 : 250))
     preparePrintWindowForDialog(win)
-    // Brief settle after show/focus so the compositor owns a real HWND
-    await new Promise((r) => setTimeout(r, 80))
-    return await printWebContents(win)
+    if (lastPrintJob) {
+      lastPrintJob.previewWindow.shown = true
+      const b = win.getBounds()
+      lastPrintJob.previewWindow.width = b.width
+      lastPrintJob.previewWindow.height = b.height
+    }
+    await waitForPrintPreviewSurface(win, meta.kind)
+    return await printWebContents(win, printOptions)
   } finally {
     if (!win.isDestroyed()) win.destroy()
     await safeUnlink(filePath)
@@ -255,18 +410,18 @@ async function printTempFile(
  */
 export async function printPdfDocument(data: ArrayBuffer | Uint8Array): Promise<boolean> {
   const buf = toBuffer(data)
-  let pageCount = 1
-  try {
-    const pdf = await PDFDocument.load(buf, { ignoreEncryption: true })
-    pageCount = pdf.getPageCount()
-  } catch {
-    pageCount = 1
-  }
-  if (pageCount < 1) throw new Error('PDF has no pages')
+  const layout = await inspectPdfPrintLayout(buf)
+  if (layout.pageCount < 1) throw new Error('PDF has no pages')
 
   const filePath = tempPath('pdf')
   await writeFile(filePath, buf)
-  return printTempFile(filePath, { kind: 'pdf', pageCount })
+  return printTempFile(filePath, {
+    kind: 'pdf',
+    pageCount: layout.pageCount,
+    landscape: layout.landscape,
+    pageWidthPt: layout.pageWidthPt,
+    pageHeightPt: layout.pageHeightPt
+  })
 }
 
 /**
@@ -331,4 +486,29 @@ export async function runPrintJob(payload: PrintPayload): Promise<boolean> {
     })
   }
   throw new Error('Invalid print kind')
+}
+
+/**
+ * Simulate placing a MediaBox onto A4 with the same defaults we seed into the
+ * print dialog. Used by verify scripts (no printer required).
+ */
+export function mediaBoxFitsSeededPaper(
+  pageWidthPt: number,
+  pageHeightPt: number,
+  opts: { landscape: boolean; marginPt?: number }
+): { fits: boolean; paperWidthPt: number; paperHeightPt: number; scale: number } {
+  const margin = opts.marginPt ?? 0
+  // A4 in PDF points
+  const a4Short = 595.28
+  const a4Long = 841.89
+  const paperWidthPt = (opts.landscape ? a4Long : a4Short) - 2 * margin
+  const paperHeightPt = (opts.landscape ? a4Short : a4Long) - 2 * margin
+  const scale = Math.min(paperWidthPt / pageWidthPt, paperHeightPt / pageHeightPt)
+  const fits =
+    pageWidthPt * Math.min(scale, 1) <= paperWidthPt + 0.5 &&
+    pageHeightPt * Math.min(scale, 1) <= paperHeightPt + 0.5 &&
+    // Actual-size (scale 1) must also fit when we seed landscape + no margins
+    pageWidthPt <= paperWidthPt + 0.5 &&
+    pageHeightPt <= paperHeightPt + 0.5
+  return { fits, paperWidthPt, paperHeightPt, scale }
 }
