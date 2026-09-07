@@ -238,7 +238,13 @@ export default function PdfViewer({
     async (
       pdf: PDFDocumentProxy,
       zoom: number,
-      opts: { preserveScroll: boolean; scrollToPage?: number; progressive?: boolean }
+      opts: {
+        preserveScroll: boolean
+        scrollToPage?: number
+        progressive?: boolean
+        /** Exact scroll to re-apply after paint (tab switch restore). */
+        restoreScroll?: { top: number; left: number }
+      }
     ) => {
       const root = containerRef.current
       if (!root) return
@@ -246,6 +252,16 @@ export default function PdfViewer({
       cancelActiveRenders()
 
       const progressive = opts.progressive === true && !opts.preserveScroll
+
+      const applyRestoreScroll = (stable: boolean): void => {
+        const rs = opts.restoreScroll
+        if (!rs) return
+        if (stable) setScrollStable(root, rs.left, rs.top)
+        else {
+          root.scrollLeft = rs.left
+          root.scrollTop = rs.top
+        }
+      }
 
       // Capture scroll metrics from live preview BEFORE any DOM swap.
       // contentX/Y are in rendered-page space (exclude horizontal center pad).
@@ -348,7 +364,8 @@ export default function PdfViewer({
           scroll?.mx ?? mx,
           scroll?.my ?? my
         )
-        for (let i = 1; i <= firstCount; i++) maybeScrollToPage(i - 1)
+        if (opts.restoreScroll) applyRestoreScroll(false)
+        else for (let i = 1; i <= firstCount; i++) maybeScrollToPage(i - 1)
         if (gen === renderGen.current) applyFindRef.current()
 
         for (let i = firstCount + 1; i <= pdf.numPages; i++) {
@@ -358,8 +375,11 @@ export default function PdfViewer({
           wrap.appendChild(pageWrap)
           // Grow sizer to match newly appended untransformed layout
           applyPreviewChrome(renderedZoomRef.current, previewZoomRef.current)
-          maybeScrollToPage(i - 1)
+          // Re-assert restored scroll as content height grows (else stays clamped)
+          if (opts.restoreScroll) applyRestoreScroll(i === pdf.numPages)
+          else maybeScrollToPage(i - 1)
         }
+        if (opts.restoreScroll && firstCount >= pdf.numPages) applyRestoreScroll(true)
         if (gen === renderGen.current) applyFindRef.current()
         return
       }
@@ -383,7 +403,9 @@ export default function PdfViewer({
         scroll?.my ?? my
       )
 
-      if (opts.scrollToPage != null && !opts.preserveScroll) {
+      if (opts.restoreScroll) {
+        applyRestoreScroll(true)
+      } else if (opts.scrollToPage != null && !opts.preserveScroll) {
         const target = document.getElementById(
           `pdf-page-${docIdRef.current}-${opts.scrollToPage}`
         )
@@ -440,10 +462,16 @@ export default function PdfViewer({
       updateDoc(doc.id, { pageCount: pdf.numPages, zoom })
       renderedZoomRef.current = zoom
       previewZoomRef.current = zoom
+      // Only restore exact scroll after the doc was viewed before; first open
+      // keeps fit-width + scrollToPage (usually page 0).
+      const hasSavedScroll = doc.scrollTop != null || doc.scrollLeft != null
       await renderPages(pdf, zoom, {
         preserveScroll: false,
-        scrollToPage: doc.currentPage,
-        progressive: true
+        scrollToPage: hasSavedScroll ? undefined : doc.currentPage,
+        progressive: true,
+        restoreScroll: hasSavedScroll
+          ? { top: doc.scrollTop ?? 0, left: doc.scrollLeft ?? 0 }
+          : undefined
       })
     })()
 
@@ -691,6 +719,36 @@ export default function PdfViewer({
       cancelActiveRenders()
     }
   }, [cancelActiveRenders])
+
+  // Persist browse position so switching tabs restores scroll (and page/zoom via OpenDoc).
+  useEffect(() => {
+    const root = containerRef.current
+    if (!root) return
+    // Capture id at effect setup — on tab switch docIdRef may already point at the next doc.
+    const id = doc.id
+
+    let raf = 0
+    const flush = (): void => {
+      raf = 0
+      updateDoc(id, {
+        scrollTop: root.scrollTop,
+        scrollLeft: root.scrollLeft
+      })
+    }
+    const onScroll = (): void => {
+      if (raf) return
+      raf = requestAnimationFrame(flush)
+    }
+    root.addEventListener('scroll', onScroll, { passive: true })
+    return () => {
+      root.removeEventListener('scroll', onScroll)
+      if (raf) cancelAnimationFrame(raf)
+      updateDoc(id, {
+        scrollTop: root.scrollTop,
+        scrollLeft: root.scrollLeft
+      })
+    }
+  }, [doc.id, updateDoc])
 
   return <div className="viewer pdf-viewer" ref={containerRef} />
 }

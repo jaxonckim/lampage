@@ -207,6 +207,7 @@ export default function MarkdownView({
   const mdEditModeRef = useRef(mdEditMode)
   mdEditModeRef.current = mdEditMode
   const shellRef = useRef<HTMLDivElement>(null)
+  const viewerRef = useRef<HTMLDivElement>(null)
   const matchIndex = useRef(0)
   const matchesRef = useRef<FindMatch[]>([])
   /** Suppress dirty while TipTap hydrates / programmatic setContent (onUpdate fires on load). */
@@ -387,8 +388,53 @@ export default function MarkdownView({
     }
   }, [])
 
+  // Restore previous browse position once the editor has content; persist on scroll/unmount.
+  useEffect(() => {
+    const el = viewerRef.current
+    if (!el || !editor) return
+    const id = doc.id
+
+    const top = doc.scrollTop
+    const left = doc.scrollLeft
+    if (top != null || left != null) {
+      const apply = (): void => {
+        el.scrollTop = top ?? 0
+        el.scrollLeft = left ?? 0
+      }
+      apply()
+      requestAnimationFrame(() => {
+        apply()
+        requestAnimationFrame(apply)
+      })
+    }
+
+    let raf = 0
+    const flush = (): void => {
+      raf = 0
+      updateDoc(id, {
+        scrollTop: el.scrollTop,
+        scrollLeft: el.scrollLeft
+      })
+    }
+    const onScroll = (): void => {
+      if (raf) return
+      raf = requestAnimationFrame(flush)
+    }
+    el.addEventListener('scroll', onScroll, { passive: true })
+    return () => {
+      el.removeEventListener('scroll', onScroll)
+      if (raf) cancelAnimationFrame(raf)
+      updateDoc(id, {
+        scrollTop: el.scrollTop,
+        scrollLeft: el.scrollLeft
+      })
+    }
+    // Intentionally only re-bind when the doc/editor identity changes — not on every scroll store write.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- scrollTop/Left are initial restore seeds
+  }, [editor, doc.id, updateDoc])
+
   return (
-    <div className="viewer">
+    <div className="viewer" ref={viewerRef}>
       <div
         ref={shellRef}
         className={`md-shell ${mdEditMode ? '' : 'read-only'}`}

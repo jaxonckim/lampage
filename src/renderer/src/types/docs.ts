@@ -15,6 +15,9 @@ export interface OpenDoc {
   /** Active fit mode for PDFs; null when user zooms manually. */
   zoomFit: ZoomFitMode | null
   currentPage: number
+  /** Viewer scroll offsets; undefined until the doc has been viewed once. */
+  scrollTop?: number
+  scrollLeft?: number
   pageCount?: number
   selectedPages: number[]
 }

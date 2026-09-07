@@ -301,7 +301,15 @@ export default function App(): JSX.Element {
 
   const onPdfMutated = (data: ArrayBuffer): void => {
     if (!doc) return
-    updateDoc(doc.id, { data, dirty: true, selectedPages: [], pageCount: undefined })
+    // Bytes changed — drop stale scroll so remount uses currentPage, not an old offset.
+    updateDoc(doc.id, {
+      data,
+      dirty: true,
+      selectedPages: [],
+      pageCount: undefined,
+      scrollTop: undefined,
+      scrollLeft: undefined
+    })
   }
 
   /*
@@ -379,6 +387,7 @@ export default function App(): JSX.Element {
               )}
               {doc?.kind === 'pdf' && (
                 <PdfViewer
+                  key={doc.id}
                   doc={doc}
                   findQuery={findQuery}
                   findOpen={findOpen}
@@ -389,6 +398,7 @@ export default function App(): JSX.Element {
               )}
               {doc?.kind === 'md' && (
                 <MarkdownView
+                  key={doc.id}
                   doc={doc}
                   findQuery={findQuery}
                   findOpen={findOpen}
