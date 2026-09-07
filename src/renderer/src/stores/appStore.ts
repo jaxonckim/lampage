@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import type { OpenDoc } from '../types/docs'
 import { decodeText, encodeText, kindFromName, uid } from '../utils/id'
+import { flushScrollFor } from '../utils/scrollFlush'
 
 const LS_LEFT = 'lampage.leftCollapsed'
 const LS_RIGHT = 'lampage.rightCollapsed'
@@ -222,6 +223,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
   setSignatureSelectedId: (id) => set({ signatureSelectedId: id }),
   setActive: (id) => {
+    const prev = get().activeId
+    if (prev && prev !== id) flushScrollFor(prev)
     const doc = get().docs.find((d) => d.id === id)
     set({
       activeId: id,
@@ -235,6 +238,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       const ok = window.confirm(`「${target.name}」有未保存的更改，确定关闭？`)
       if (!ok) return
     }
+    // Persist browse position before tearing down the active viewer.
+    if (get().activeId === id) flushScrollFor(id)
     get().clearSignatureOverlays(id)
     const docs = get().docs.filter((d) => d.id !== id)
     const activeId = get().activeId === id ? docs[0]?.id ?? null : get().activeId
@@ -293,6 +298,8 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (!focusId) return
 
     const focused = docs.find((d) => d.id === focusId) ?? null
+    const prevActive = get().activeId
+    if (prevActive && prevActive !== focusId) flushScrollFor(prevActive)
     set({
       docs,
       activeId: focusId,

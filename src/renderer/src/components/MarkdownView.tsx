@@ -13,6 +13,7 @@ import {
   scrollToMatch,
   type FindMatch
 } from '../utils/textFind'
+import { registerScrollFlusher } from '../utils/scrollFlush'
 
 interface Props {
   doc: OpenDoc
@@ -389,10 +390,12 @@ export default function MarkdownView({
   }, [])
 
   // Restore previous browse position once the editor has content; persist on scroll/unmount.
+  // Sync flusher for setActive; avoid pre-paint 0 clobber (StrictMode / restore-in-flight).
   useEffect(() => {
     const el = viewerRef.current
     if (!el || !editor) return
     const id = doc.id
+    let allowPersist = false
 
     const top = doc.scrollTop
     const left = doc.scrollLeft
@@ -409,25 +412,38 @@ export default function MarkdownView({
     }
 
     let raf = 0
-    const flush = (): void => {
-      raf = 0
+    const writeScroll = (): void => {
+      if (!allowPersist) return
       updateDoc(id, {
         scrollTop: el.scrollTop,
         scrollLeft: el.scrollLeft
       })
     }
+    const flush = (): void => {
+      raf = 0
+      writeScroll()
+    }
     const onScroll = (): void => {
+      if (el.scrollTop > 0 || el.scrollLeft > 0) allowPersist = true
+      if (!allowPersist) return
       if (raf) return
       raf = requestAnimationFrame(flush)
     }
     el.addEventListener('scroll', onScroll, { passive: true })
+    const unregister = registerScrollFlusher(id, () => {
+      if (raf) {
+        cancelAnimationFrame(raf)
+        raf = 0
+      }
+      allowPersist = true
+      writeScroll()
+    })
     return () => {
       el.removeEventListener('scroll', onScroll)
       if (raf) cancelAnimationFrame(raf)
-      updateDoc(id, {
-        scrollTop: el.scrollTop,
-        scrollLeft: el.scrollLeft
-      })
+      unregister()
+      // Do not persist here: useEffect cleanups run after DOM removal, when
+      // scrollTop is often already 0. setActive/closeDoc flush synchronously first.
     }
     // Intentionally only re-bind when the doc/editor identity changes — not on every scroll store write.
     // eslint-disable-next-line react-hooks/exhaustive-deps -- scrollTop/Left are initial restore seeds

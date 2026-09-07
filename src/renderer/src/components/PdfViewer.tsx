@@ -17,6 +17,7 @@ import {
   computeFitZoomFromPageSize,
   type ZoomFitMode
 } from '../utils/pdfFitZoom'
+import { registerScrollFlusher } from '../utils/scrollFlush'
 
 interface Props {
   doc: OpenDoc
@@ -436,10 +437,19 @@ export default function PdfViewer({
           /* ignore */
         }
       }
+      // Remount with a prior browse position: keep stored zoom, skip fit-width
+      // first-open, and render fully before restoring scroll (stable height).
+      const hasSavedScroll = doc.scrollTop != null || doc.scrollLeft != null
       let zoom = doc.zoom
       const fitMode = zoomFitRef.current
       const root = containerRef.current
-      if (fitMode && root && root.clientWidth > 0 && root.clientHeight > 0) {
+      if (
+        !hasSavedScroll &&
+        fitMode &&
+        root &&
+        root.clientWidth > 0 &&
+        root.clientHeight > 0
+      ) {
         try {
           const page = await pdf.getPage(Math.max(1, doc.currentPage + 1))
           if (cancelled || gen !== dataGen.current) {
@@ -462,13 +472,11 @@ export default function PdfViewer({
       updateDoc(doc.id, { pageCount: pdf.numPages, zoom })
       renderedZoomRef.current = zoom
       previewZoomRef.current = zoom
-      // Only restore exact scroll after the doc was viewed before; first open
-      // keeps fit-width + scrollToPage (usually page 0).
-      const hasSavedScroll = doc.scrollTop != null || doc.scrollLeft != null
       await renderPages(pdf, zoom, {
         preserveScroll: false,
         scrollToPage: hasSavedScroll ? undefined : doc.currentPage,
-        progressive: true,
+        // Non-progressive restore: full content height exists before scroll apply.
+        progressive: !hasSavedScroll,
         restoreScroll: hasSavedScroll
           ? { top: doc.scrollTop ?? 0, left: doc.scrollLeft ?? 0 }
           : undefined
@@ -506,8 +514,10 @@ export default function PdfViewer({
   }, [doc.zoom, renderPages, applyPreviewChrome])
 
   // If fit mode is set but zoom was not applied yet (pages not ready), apply once DOM exists.
+  // Skip when remounting with a saved browse position — keep stored zoom for restore.
   useEffect(() => {
     if (!doc.zoomFit) return
+    if (doc.scrollTop != null || doc.scrollLeft != null) return
     const root = containerRef.current
     if (!root) return
 
@@ -530,7 +540,7 @@ export default function PdfViewer({
       if (tryApply()) window.clearInterval(timer)
     }, 50)
     return () => window.clearInterval(timer)
-  }, [doc.zoomFit, doc.id, doc.currentPage, updateDoc])
+  }, [doc.zoomFit, doc.id, doc.currentPage, doc.scrollTop, doc.scrollLeft, updateDoc])
 
   // Ctrl/Cmd+wheel: continuous zoom centered on cursor
   useEffect(() => {
@@ -721,32 +731,48 @@ export default function PdfViewer({
   }, [cancelActiveRenders])
 
   // Persist browse position so switching tabs restores scroll (and page/zoom via OpenDoc).
+  // Sync flusher runs from setActive *before* activeId changes. Skip writes until the
+  // user has scrolled or a tab-switch flush runs — avoids StrictMode/pre-paint 0
+  // clobbering a saved offset or falsely marking first-open as "restored".
   useEffect(() => {
     const root = containerRef.current
     if (!root) return
-    // Capture id at effect setup — on tab switch docIdRef may already point at the next doc.
     const id = doc.id
-
+    let allowPersist = false
     let raf = 0
-    const flush = (): void => {
-      raf = 0
+
+    const writeScroll = (): void => {
+      if (!allowPersist) return
       updateDoc(id, {
         scrollTop: root.scrollTop,
         scrollLeft: root.scrollLeft
       })
     }
+    const flush = (): void => {
+      raf = 0
+      writeScroll()
+    }
     const onScroll = (): void => {
+      if (root.scrollTop > 0 || root.scrollLeft > 0) allowPersist = true
+      if (!allowPersist) return
       if (raf) return
       raf = requestAnimationFrame(flush)
     }
     root.addEventListener('scroll', onScroll, { passive: true })
+    const unregister = registerScrollFlusher(id, () => {
+      if (raf) {
+        cancelAnimationFrame(raf)
+        raf = 0
+      }
+      allowPersist = true
+      writeScroll()
+    })
     return () => {
       root.removeEventListener('scroll', onScroll)
       if (raf) cancelAnimationFrame(raf)
-      updateDoc(id, {
-        scrollTop: root.scrollTop,
-        scrollLeft: root.scrollLeft
-      })
+      unregister()
+      // Do not persist here: useEffect cleanups run after DOM removal, when
+      // scrollTop is often already 0. setActive/closeDoc flush synchronously first.
     }
   }, [doc.id, updateDoc])
 
