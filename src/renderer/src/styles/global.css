@@ -140,13 +140,15 @@ button, input, select, textarea { font-family: inherit; }
   background: var(--accent-soft);
   color: var(--accent);
 }
-/* MD edit-mode toggle: solid accent so "on" is unmistakable */
-.icon-btn.md-edit-btn.active {
+/* Solid accent so "on" is unmistakable (MD edit, PDF fit zoom) */
+.icon-btn.md-edit-btn.active,
+.icon-btn.fit-zoom-btn.active {
   background: var(--accent);
   color: #fff;
   box-shadow: 0 0 0 2px var(--accent-ring);
 }
-.icon-btn.md-edit-btn.active:hover:not(:disabled) {
+.icon-btn.md-edit-btn.active:hover:not(:disabled),
+.icon-btn.fit-zoom-btn.active:hover:not(:disabled) {
   background: var(--accent-hover);
   color: #fff;
 }

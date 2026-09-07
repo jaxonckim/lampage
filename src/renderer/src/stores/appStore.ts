@@ -278,6 +278,8 @@ export const useAppStore = create<AppState>((set, get) => ({
         text: kind === 'md' ? decodeText(f.data) : undefined,
         dirty: f.dirty ?? false,
         zoom: 1,
+        // PDFs open in fit-width; MD ignores zoomFit.
+        zoomFit: kind === 'pdf' ? 'width' : null,
         currentPage: 0,
         pageCount: undefined,
         selectedPages: []

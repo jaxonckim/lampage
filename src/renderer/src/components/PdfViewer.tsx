@@ -12,6 +12,11 @@ import {
   type FindMatch
 } from '../utils/textFind'
 import { getSelectionPlainText, isPdfTextSelection, writeClipboardText } from '../utils/selectionText'
+import {
+  computeFitZoomFromDom,
+  computeFitZoomFromPageSize,
+  type ZoomFitMode
+} from '../utils/pdfFitZoom'
 
 interface Props {
   doc: OpenDoc
@@ -86,6 +91,8 @@ export default function PdfViewer({
   docZoomRef.current = doc.zoom
   const docIdRef = useRef(doc.id)
   docIdRef.current = doc.id
+  const zoomFitRef = useRef<ZoomFitMode | null>(doc.zoomFit)
+  zoomFitRef.current = doc.zoomFit
 
   const cancelActiveRenders = useCallback(() => {
     for (const t of activeRenderTasks.current) {
@@ -407,10 +414,33 @@ export default function PdfViewer({
           /* ignore */
         }
       }
-      updateDoc(doc.id, { pageCount: pdf.numPages })
-      renderedZoomRef.current = doc.zoom
-      previewZoomRef.current = doc.zoom
-      await renderPages(pdf, doc.zoom, {
+      let zoom = doc.zoom
+      const fitMode = zoomFitRef.current
+      const root = containerRef.current
+      if (fitMode && root && root.clientWidth > 0 && root.clientHeight > 0) {
+        try {
+          const page = await pdf.getPage(Math.max(1, doc.currentPage + 1))
+          if (cancelled || gen !== dataGen.current) {
+            pdf.destroy()
+            return
+          }
+          const viewport = page.getViewport({ scale: CSS_BASE })
+          const fitted = computeFitZoomFromPageSize(
+            viewport.width,
+            viewport.height,
+            root.clientWidth,
+            root.clientHeight,
+            fitMode
+          )
+          if (fitted != null) zoom = fitted
+        } catch {
+          /* fall through with doc.zoom */
+        }
+      }
+      updateDoc(doc.id, { pageCount: pdf.numPages, zoom })
+      renderedZoomRef.current = zoom
+      previewZoomRef.current = zoom
+      await renderPages(pdf, zoom, {
         preserveScroll: false,
         scrollToPage: doc.currentPage,
         progressive: true
@@ -446,6 +476,33 @@ export default function PdfViewer({
     // Non-progressive: keep CSS preview until full settle tree is ready, then swap+scroll
     void renderPages(pdf, doc.zoom, { preserveScroll: true, progressive: false })
   }, [doc.zoom, renderPages, applyPreviewChrome])
+
+  // If fit mode is set but zoom was not applied yet (pages not ready), apply once DOM exists.
+  useEffect(() => {
+    if (!doc.zoomFit) return
+    const root = containerRef.current
+    if (!root) return
+
+    const tryApply = (): boolean => {
+      const mode = zoomFitRef.current
+      if (!mode) return true
+      const pageEl =
+        document.getElementById(`pdf-page-${doc.id}-${doc.currentPage}`) ??
+        (root.querySelector('.pdf-page-wrap') as HTMLElement | null)
+      if (!pageEl || pageEl.offsetWidth <= 0) return false
+      const next = computeFitZoomFromDom(root, pageEl, docZoomRef.current, mode)
+      if (next != null && Math.abs(next - docZoomRef.current) > 0.01) {
+        updateDoc(doc.id, { zoom: next })
+      }
+      return true
+    }
+
+    if (tryApply()) return
+    const timer = window.setInterval(() => {
+      if (tryApply()) window.clearInterval(timer)
+    }, 50)
+    return () => window.clearInterval(timer)
+  }, [doc.zoomFit, doc.id, doc.currentPage, updateDoc])
 
   // Ctrl/Cmd+wheel: continuous zoom centered on cursor
   useEffect(() => {
@@ -487,7 +544,7 @@ export default function PdfViewer({
         settleTimerRef.current = null
         const z = previewZoomRef.current
         if (Math.abs(z - docZoomRef.current) < 0.001) return
-        updateDoc(docIdRef.current, { zoom: z })
+        updateDoc(docIdRef.current, { zoom: z, zoomFit: null })
       }, SETTLE_MS)
     }
 
@@ -504,6 +561,24 @@ export default function PdfViewer({
     if (!root || typeof ResizeObserver === 'undefined') return
     const ro = new ResizeObserver(() => {
       if (!sizerRef.current || !pagesRef.current) return
+      const fitMode = zoomFitRef.current
+      if (fitMode) {
+        const pageEl =
+          document.getElementById(`pdf-page-${docIdRef.current}-0`) ??
+          (pagesRef.current.querySelector('.pdf-page-wrap') as HTMLElement | null)
+        if (pageEl) {
+          const next = computeFitZoomFromDom(
+            root,
+            pageEl,
+            docZoomRef.current,
+            fitMode
+          )
+          if (next != null && Math.abs(next - docZoomRef.current) > 0.01) {
+            updateDoc(docIdRef.current, { zoom: next })
+            return
+          }
+        }
+      }
       const oldPad = centerPadRef.current
       const midX = root.clientWidth / 2
       const ratio =
@@ -516,7 +591,7 @@ export default function PdfViewer({
     })
     ro.observe(root)
     return () => ro.disconnect()
-  }, [applyPreviewChrome])
+  }, [applyPreviewChrome, updateDoc])
 
   // Intercept copy so Ctrl+C matches visual PDF selection
   useEffect(() => {

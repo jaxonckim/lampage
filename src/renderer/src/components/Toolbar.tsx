@@ -19,6 +19,10 @@ import {
 } from 'lucide-react'
 import { useAppStore } from '../stores/appStore'
 import { suppressPageSync } from '../utils/pageSync'
+import {
+  computeFitZoomFromDom,
+  type ZoomFitMode
+} from '../utils/pdfFitZoom'
 
 interface ChromeProps {
   onOpen: () => void
@@ -93,36 +97,33 @@ export function FunctionBar({
   const setSignatureOpen = useAppStore((s) => s.setSignatureOpen)
 
   const zoom = doc?.zoom ?? 1
+  const zoomFit = doc?.zoomFit ?? null
+
+  /** Manual zoom clears fit mode (free zoom). */
   const setZoom = (z: number): void => {
     if (!doc) return
-    updateDoc(doc.id, { zoom: Math.min(3, Math.max(0.4, Number(z.toFixed(2)))) })
+    updateDoc(doc.id, {
+      zoom: Math.min(3, Math.max(0.4, Number(z.toFixed(2)))),
+      zoomFit: null
+    })
   }
 
-  /** Match PdfViewer chrome so fit zoom accounts for scaled padding. */
-  const FIT_PAD_X = 16
-  const FIT_PAD_TOP = 24
-  const FIT_PAD_BOTTOM = 48
-
-  const fitZoom = (mode: 'width' | 'page'): void => {
+  const fitZoom = (mode: ZoomFitMode): void => {
     if (!doc || doc.kind !== 'pdf') return
     const viewer = document.querySelector('.pdf-viewer') as HTMLElement | null
     const pageEl =
       document.getElementById(`pdf-page-${doc.id}-${doc.currentPage}`) ??
       (viewer?.querySelector('.pdf-page-wrap') as HTMLElement | null)
-    if (!viewer || !pageEl) return
-    const zNow = Math.max(doc.zoom, 1e-6)
-    // Page wrap width/height are at current zoom; normalize to zoom=1.
-    const pageW1 = pageEl.offsetWidth / zNow
-    const pageH1 = pageEl.offsetHeight / zNow
-    if (pageW1 <= 0 || pageH1 <= 0) return
-    const availW = viewer.clientWidth
-    const availH = viewer.clientHeight
-    if (availW <= 0 || availH <= 0) return
-    // Content size at zoom z ≈ (page + chrome) * z  (center pad is 0 when fitting).
-    const zW = availW / (pageW1 + 2 * FIT_PAD_X)
-    const zH = availH / (pageH1 + FIT_PAD_TOP + FIT_PAD_BOTTOM)
-    const next = mode === 'width' ? zW : Math.min(zW, zH)
-    setZoom(next)
+    if (!viewer || !pageEl) {
+      updateDoc(doc.id, { zoomFit: mode })
+      return
+    }
+    const next = computeFitZoomFromDom(viewer, pageEl, doc.zoom, mode)
+    if (next == null) {
+      updateDoc(doc.id, { zoomFit: mode })
+      return
+    }
+    updateDoc(doc.id, { zoom: next, zoomFit: mode })
   }
 
   const pageCount = doc?.kind === 'pdf' ? doc.pageCount ?? 0 : 0
@@ -202,21 +203,23 @@ export function FunctionBar({
       </button>
       <button
         type="button"
-        className="icon-btn"
+        className={`icon-btn fit-zoom-btn${zoomFit === 'width' ? ' active' : ''}`}
         disabled={!doc || doc.kind !== 'pdf'}
         onClick={() => fitZoom('width')}
         title="适应宽度"
         aria-label="适应宽度"
+        aria-pressed={zoomFit === 'width'}
       >
         <ArrowLeftRight size={16} strokeWidth={1.75} />
       </button>
       <button
         type="button"
-        className="icon-btn"
+        className={`icon-btn fit-zoom-btn${zoomFit === 'page' ? ' active' : ''}`}
         disabled={!doc || doc.kind !== 'pdf'}
         onClick={() => fitZoom('page')}
         title="适应页面"
         aria-label="适应页面"
+        aria-pressed={zoomFit === 'page'}
       >
         <Maximize2 size={16} strokeWidth={1.75} />
       </button>
